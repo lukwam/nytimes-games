@@ -4,6 +4,25 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## 0.9.6
+
+### Added
+
+- `AsyncNYTGamesClient`, an asyncio client with every method of
+  `NYTGamesClient`, awaited (`async with AsyncNYTGamesClient() as client:`).
+  It needs the new `async` extra (`pip install "nytimes-games[async]"`),
+  which adds httpx; the base install and the sync client, still on
+  requests, don't change. Errors, retries with backoff and cookie handling
+  match the sync client. Closes #19.
+
+### Changed
+
+- Each endpoint is written once, as an operation both clients run (see
+  `nytgames.transport`), so the two clients can't drift apart. Operations
+  that use others, such as `badges()` or `wordlebot_summary()`, now call them
+  directly, so overriding or patching a method on a client instance no
+  longer changes those calls; patch `_get` to fake NYT's responses instead.
+
 ## 0.9.5
 
 ### Fixed

@@ -67,11 +67,17 @@ def test_bonus_endpoints(session):
         session.get.return_value.json.return_value = WORDLE_IN_ONE if item.game == "wordle-in-one" else CONNECTIONS_3X3
         client.bonus_puzzle(item)
         assert session.get.call_args.args[0] == "https://www.nytimes.com" + path
-    with mock.patch.object(client, "strands_bonus") as strands, mock.patch.object(client, "crossword_by_id") as xwd:
-        client.bonus_puzzle(week.puzzles[2])
-        client.bonus_puzzle(week.puzzles[3])
-    strands.assert_called_once_with("2026-10-07-1130")
-    xwd.assert_called_once_with(24411)
+    paths = []
+
+    def get(path, params=None, json_response=True):
+        paths.append(path)
+        raise NYTGamesNotFoundError("404")
+
+    with mock.patch.object(client, "_get", side_effect=get):
+        for item in week.puzzles[2:4]:
+            with pytest.raises(NYTGamesNotFoundError):
+                client.bonus_puzzle(item)
+    assert paths == ["/svc/strands/v2/bonus/2026-10-07-1130.json", "/svc/crosswords/v6/puzzle/24411.json"]
 
 
 @pytest.mark.parametrize("method,kwargs,game", [
@@ -95,12 +101,13 @@ def test_bonus_weeks_stop_at_unpublished_and_first_weeks():
         "2026-09-02": {**WEEK, "drop_date": "2026-09-02", "next_drop": "2026-09-09"},
     }
 
-    def bonus_week(date):
+    def get(path, params=None, json_response=True):
+        date = path.rsplit("/", 1)[1].removesuffix(".json")
         if date not in weeks:
             raise NYTGamesNotFoundError("404")
-        return BonusWeek(**weeks[date])
+        return {"bonus_puzzles_week": weeks[date]}
 
-    with mock.patch.object(client, "bonus_week", side_effect=bonus_week):
+    with mock.patch.object(client, "_get", side_effect=get):
         assert [w.drop_date for w in client.bonus_weeks("2026-08-20", "2026-12-31")] == ["2026-08-26", "2026-09-02"]
         assert [w.drop_date for w in client.bonus_weeks("2026-08-20", "2026-08-31")] == ["2026-08-26"]
 

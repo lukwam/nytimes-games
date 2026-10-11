@@ -36,7 +36,8 @@ uvicorn nytgames.api:app --reload
 
 ```
 src/nytgames/
-    client.py        NYTGamesClient: one method per NYT endpoint
+    client.py        NYTGamesClient and AsyncNYTGamesClient: one operation per NYT endpoint
+    transport.py     Runs operations for the sync (requests) and async (httpx) clients
     models.py        Pydantic models for NYT's responses
     exceptions.py    Error types
     spelling_bee.py  Spelling Bee hints
@@ -73,8 +74,12 @@ Set `NYT_COOKIES` to also check the endpoints that need cookies.
 
 ## Adding or fixing an endpoint
 
-1. Add a method to `NYTGamesClient` in `client.py`, and a model in `models.py`.
-   Models allow extra fields, so only type the fields you use or document.
+1. Add an operation to `_Operations` in `client.py`, and a model in `models.py`.
+   An operation is a generator: `data = yield Request(path, params)` makes a
+   request, and `yield from _Operations.other(self, ...)` calls another
+   operation. Both clients get the method from it, so write each endpoint
+   once. Models allow extra fields, so only type the fields you use or
+   document.
 2. Add a route to `api.py` that calls the client method, and a command to
    `cli/` if it's useful on the command line. Commands build JSON-compatible
    data and pass it to `output.emit()` with a table renderer, so every output
