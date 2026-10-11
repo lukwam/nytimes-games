@@ -98,4 +98,8 @@ and explain in the description what you checked against NYT.
 
 Maintainers release by bumping `__version__` in `src/nytgames/__init__.py`,
 updating `CHANGELOG.md`, and pushing a `vX.Y.Z` tag. The publish workflow
-checks the tag matches the version, runs the tests and publishes to PyPI.
+checks the tag matches the version, runs the tests and publishes to TestPyPI,
+then PyPI. To try a release first, run the "Publish to PyPI" workflow by hand
+(Actions → Run workflow) on your branch: it publishes to
+[TestPyPI](https://test.pypi.org/project/nytimes-games/) only, and the tag
+skips that version there later.
