@@ -262,55 +262,42 @@ constructor, and [your own REST API](examples/api) in Docker.
 
 ## Async apps
 
-`NYTGamesClient` is synchronous, but works in async apps as long as its calls
-run outside the event loop.
+`AsyncNYTGamesClient` has every method of `NYTGamesClient`, awaited. It needs
+the `async` extra, which adds [httpx](https://www.python-httpx.org/):
 
-**FastAPI:** declare routes with plain `def`. FastAPI runs those in a thread
-pool, so the client's requests don't block the event loop. (The routes in
-`nytgames.api` work this way.)
-
-```python
-from fastapi import FastAPI
-from nytgames import NYTGamesClient
-
-app = FastAPI()
-client = NYTGamesClient()
-
-
-@app.get("/wordle/{date}")
-def wordle(date: str):
-    return client.wordle(date)
+```bash
+pip install "nytimes-games[async]"
 ```
-
-In an `async def` route, use `await run_in_threadpool(client.wordle, date)`
-(from `fastapi.concurrency`) instead of calling the client directly.
-
-**Other asyncio code** (bots, aiohttp, scripts): run calls with
-`asyncio.to_thread`. To fetch several puzzles at once, limit how many run at
-a time to be polite to NYT, and give each task its own client, since
-`requests` sessions aren't guaranteed to be thread safe:
 
 ```python
 import asyncio
-from nytgames import NYTGamesClient
+from nytgames import AsyncNYTGamesClient
 
 
-async def connections(dates: list[str]):
-    limit = asyncio.Semaphore(4)
-
-    async def fetch(day: str):
-        async with limit:
-            return await asyncio.to_thread(NYTGamesClient().connections, day)
-
-    return await asyncio.gather(*(fetch(day) for day in dates))
+async def main():
+    async with AsyncNYTGamesClient(cookies="NYT-S=...") as client:
+        wordle = await client.wordle("2026-10-11")
+        stats = await client.player_stats()
+        # Fetch several at once; keep it modest to be polite to NYT.
+        week = await asyncio.gather(*(client.connections(f"2026-10-0{d}") for d in range(1, 8)))
 
 
-puzzles = asyncio.run(connections(["2025-06-10", "2025-06-11", "2025-06-12"]))
+asyncio.run(main())
 ```
 
-In Home Assistant, use `await hass.async_add_executor_job(client.wordle, date)`.
-A native async client is tracked in
-[#19](https://github.com/lukwam/nytimes-games/issues/19).
+Errors, retries and cookie handling are the same as the sync client's: errors
+are the same `NYTGamesHTTPError` subclasses (with an `httpx.Response` as
+`.response`), and failed connections, rate limits and server errors are
+retried with backoff. Pass your own `httpx.AsyncClient` as `http_client` to
+control transport details; it isn't closed when the client is. Both clients
+run the same code for every endpoint, so they always have the same methods.
+
+**FastAPI:** use `AsyncNYTGamesClient` in `async def` routes, or the sync
+client in plain `def` routes (FastAPI runs those in a thread pool). The
+routes in `nytgames.api` use the sync client this way.
+
+**Home Assistant:** use `AsyncNYTGamesClient` with Home Assistant's shared
+httpx client (`get_async_client(hass)`) as `http_client`.
 
 ## Command line
 

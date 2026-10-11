@@ -1,5 +1,8 @@
 """NYT Games client."""
+import asyncio
 import datetime
+import functools
+import inspect
 import json
 import logging
 import re
@@ -13,13 +16,9 @@ from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 
 from nytgames import __version__
-from nytgames.exceptions import NYTGamesAuthenticationError
-from nytgames.exceptions import NYTGamesHTTPError
 from nytgames.exceptions import NYTGamesNoProfileError
 from nytgames.exceptions import NYTGamesNotFoundError
 from nytgames.exceptions import NYTGamesParseError
-from nytgames.exceptions import NYTGamesParseError
-from nytgames.exceptions import NYTGamesRateLimitError
 from nytgames.models import ArchiveGame
 from nytgames.models import ArchivePuzzle
 from nytgames.models import BadgeGame
@@ -47,6 +46,12 @@ from nytgames.models import WordlePuzzle
 from nytgames.models import WordleInOneLatest
 from nytgames.models import WordleInOnePuzzle
 from nytgames.models import WordlePuzzlesList
+from nytgames.transport import RETRY_STATUSES
+from nytgames.transport import Request
+from nytgames.transport import http_error
+from nytgames.transport import retry_after  # noqa: F401  (public before transport.py)
+from nytgames.transport import run_async
+from nytgames.transport import run_sync
 
 logger = logging.getLogger(__name__)
 
@@ -139,14 +144,6 @@ def retrying_session(retries: int = 3, backoff: float = 0.5) -> requests.Session
     return session
 
 
-def retry_after(response) -> float | None:
-    """Return the seconds from a Retry-After header, if it has a number."""
-    try:
-        return float(response.headers.get("Retry-After"))
-    except (TypeError, ValueError):
-        return None
-
-
 def get_game_data(body: bytes) -> dict | None:
     """Get Game Data from Spelling Bee Page."""
     soup = BeautifulSoup(body, "html.parser")
@@ -158,7 +155,399 @@ def get_game_data(body: bytes) -> dict | None:
     return None
 
 
-class NYTGamesClient:
+class _Operations:
+    """Every request the clients make, written once as generators (see
+    nytgames.transport). NYTGamesClient and AsyncNYTGamesClient run them."""
+
+    cookies: dict[str, str]
+    user_agent: str
+    base_url: str
+
+    def _prepare(self, path: str, params: dict | None, json_response: bool):
+        """Return the URL, headers, params and whether to send cookies for a request.
+
+        `path` is relative to `base_url`, or a full URL. Cookies are only sent
+        to `base_url` and www.nytimes.com, never to other hosts such as NYT's
+        static file server.
+        """
+        headers = {"User-Agent": self.user_agent}
+        if json_response:
+            headers["Accept"] = "application/json"
+        if params:
+            params = {k: v for k, v in params.items() if v is not None}
+        if path.startswith("https://"):
+            return path, headers, params, path.startswith((self.base_url + "/", NYT_BASE_URL + "/"))
+        return f"{self.base_url}{path}", headers, params, True
+
+    # Archive
+    def archive(
+        self,
+        game: ArchiveGame | str,
+        date_start: str,
+        date_end: str,
+    ) -> list[ArchivePuzzle]:
+        """Return the puzzles published between two dates (YYYY-MM-DD), inclusive.
+
+        `game` is connections, strands, wordle, crossword_daily, crossword_mini
+        or crossword_midi. Each puzzle has its ID and print date, so this is the
+        quickest way to find puzzle IDs for the game state methods. Doesn't
+        need cookies. Future dates are not included.
+
+        A few dates have two puzzles (such as 2022-12-31's daily and its 50x50
+        Supermega); both are returned, so print dates can repeat.
+
+        NYT returns at most 31 puzzles per request, so ranges are fetched 31
+        days at a time, and a window that hits the limit is split and fetched
+        again so no date is dropped.
+        """
+        game = ArchiveGame(game).value
+        start = datetime.date.fromisoformat(date_start)
+        end = datetime.date.fromisoformat(date_end)
+        puzzles: dict[int, ArchivePuzzle] = {}
+        while start <= end:
+            window_end = min(start + datetime.timedelta(days=ARCHIVE_DAYS - 1), end)
+            for puzzle in (yield from _Operations._archive_window(self, game, start, window_end)):
+                puzzles.setdefault(puzzle.id, puzzle)
+            start = window_end + datetime.timedelta(days=1)
+        return sorted(puzzles.values(), key=lambda puzzle: (puzzle.print_date, puzzle.id))
+
+    def _archive_window(self, game: str, start: datetime.date, end: datetime.date) -> list[ArchivePuzzle]:
+        """Fetch one window, splitting it if NYT's 31 puzzle limit may have cut it short."""
+        response = (yield Request(f"/svc/games/v1/archive/{game}/{start}/{end}"))
+        if len(response) < ARCHIVE_DAYS or start == end:
+            return [ArchivePuzzle(**puzzle) for puzzle in response]
+        middle = start + (end - start) // 2
+        return ((yield from _Operations._archive_window(self, game, start, middle))
+                + (yield from _Operations._archive_window(self, game, middle + datetime.timedelta(days=1), end)))
+
+    # Badges
+    def trophy_case(self, game: BadgeGame | str) -> TrophyCase:
+        """Return every badge for a game, earned or not, with your progress.
+
+        `game` is wordleV2, connections, strands or spelling_bee. Requires
+        the NYT-S cookie. This is the NYT Games app's trophy case; the saved
+        game state methods only include the three badges on your shelf.
+        """
+        game = BadgeGame(game).value
+        return TrophyCase(**(yield Request(f"/svc/games/badges/trophy-case/{game}")))
+
+    def badges(self, games: Iterable[BadgeGame | str] = BADGE_GAMES) -> TrophyCase:
+        """Return every badge for each game (default: all four), in one
+        TrophyCase keyed by game. Makes one request per game.
+
+        Names, descriptions and artwork are in each badge's `info`.
+        """
+        result = TrophyCase()
+        for game in games:
+            case = (yield from _Operations.trophy_case(self, game))
+            result.user_id = result.user_id or case.user_id
+            result.trophies.update(case.trophies)
+        return result
+
+    # Bonus Puzzles
+    def bonus_week(self, date: str) -> BonusWeek:
+        """Return the week's Bonus Puzzles drop that includes a date (YYYY-MM-DD).
+
+        Drops come out on Wednesdays, starting 2026-08-26 (earlier dates
+        return that first week), and NYT serves the next week's drop early.
+        """
+        response = (yield Request(f"/svc/games/bonus/week/v1/{date}.json"))
+        if not isinstance(response, dict) or not isinstance(response.get("bonus_puzzles_week"), dict):
+            raise NYTGamesParseError("NYT's bonus week response has no bonus_puzzles_week")
+        return BonusWeek(**response["bonus_puzzles_week"])
+
+    def bonus_weeks(self, date_start: str, date_end: str) -> list[BonusWeek]:
+        """Return each week's Bonus Puzzles drop between two dates, oldest
+        first, up to the latest published week. Makes one request per week."""
+        weeks = [(yield from _Operations.bonus_week(self, date_start))]
+        while True:
+            next_drop = weeks[-1].next_drop
+            if not next_drop or next_drop > date_end or next_drop <= weeks[-1].drop_date:
+                return weeks
+            try:
+                week = (yield from _Operations.bonus_week(self, next_drop))
+            except NYTGamesNotFoundError:  # not published yet
+                return weeks
+            if week.drop_date <= weeks[-1].drop_date:
+                return weeks
+            weeks.append(week)
+
+    def bonus_puzzle(self, listing: BonusPuzzleListing):
+        """Return a bonus puzzle from its listing in a BonusWeek: a
+        WordleInOnePuzzle, ConnectionsPuzzle, StrandsPuzzle or CrosswordPuzzle."""
+        fetch = {"wordle-in-one": _Operations.wordle_in_one, "connections": _Operations.connections_bonus,
+                 "strands": _Operations.strands_bonus}.get(listing.game)
+        if fetch:
+            return (yield from fetch(self, listing.slug))
+        if listing.game == "crossword":
+            return (yield from _Operations.crossword_by_id(self, listing.id))
+        raise ValueError(f"Unknown bonus puzzle game: {listing.game}")
+
+    def wordle_in_one(self, slug: str) -> WordleInOnePuzzle:
+        """Return a Wordle in 1 bonus puzzle by its slug (e.g. 2026-10-07-8)."""
+        return WordleInOnePuzzle(**(yield Request(f"/svc/wordle-in-one/v1/bonus/{slug}.json")))
+
+    def connections_bonus(self, slug: str) -> ConnectionsPuzzle:
+        """Return a Connections bonus puzzle (Connections 3x3) by its slug."""
+        return ConnectionsPuzzle(**(yield Request(f"/svc/connections/v2/bonus/{slug}.json")))
+
+    def strands_bonus(self, slug: str) -> StrandsPuzzle:
+        """Return a Strands bonus puzzle (Colorful Strands) by its slug."""
+        return StrandsPuzzle(**(yield Request(f"/svc/strands/v2/bonus/{slug}.json")))
+
+    def wordle_in_one_latest(self, puzzle_ids: PuzzleIds = None) -> WordleInOneLatest:
+        """Return the user's saved Wordle in 1 games.
+
+        `puzzle_ids` is a puzzle ID (the listing's `id`), a comma separated
+        string or a list of up to 30 IDs. `states` only includes puzzles the
+        user has played.
+        """
+        response = (yield Request(
+            "/svc/games/state/wordle_in_one/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
+        ))
+        return WordleInOneLatest(**response)
+
+    # Connections
+    def connections(self, date: str) -> ConnectionsPuzzle:
+        """Return the Connections puzzle for a date (YYYY-MM-DD)."""
+        return ConnectionsPuzzle(**(yield Request(f"/svc/connections/v2/{date}.json")))
+
+    def connections_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> ConnectionsLatest:
+        """Return the user's latest Connections game states.
+
+        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
+        to 30 IDs. `states` only includes puzzles the user has played. Set
+        `bonus` for bonus puzzles (Connections 3x3).
+        """
+        game = "connections_bonus" if bonus else "connections"
+        response = (yield Request(
+            f"/svc/games/state/{game}/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
+        ))
+        return ConnectionsLatest(**response)
+
+    # Crosswords
+    def crossword(
+        self,
+        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
+        date: str | None = None,
+    ) -> CrosswordPuzzle:
+        """Return a crossword puzzle.
+
+        `publish_type` is one of daily, mini, midi or bonus. Returns today's
+        puzzle if `date` is not set (bonus puzzles require a date).
+        """
+        publish_type = CrosswordPublishType(publish_type).value
+        path = f"/svc/crosswords/v6/puzzle/{publish_type}"
+        path = f"{path}/{date}.json" if date else f"{path}.json"
+        return CrosswordPuzzle(**(yield Request(path)))
+
+    def crossword_by_id(self, puzzle_id: int | str) -> CrosswordPuzzle:
+        """Return a crossword of any type by its puzzle ID.
+
+        Use it for dates with more than one puzzle, where crossword(date)
+        returns only one of them (archive() lists both).
+        """
+        return CrosswordPuzzle(**(yield Request(f"/svc/crosswords/v6/puzzle/{puzzle_id}.json")))
+
+    def crossword_puzzles(
+        self,
+        publish_type: CrosswordPublishType | str | None = None,
+        sort_order: str | None = None,
+        sort_by: str | None = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
+    ) -> CrosswordPuzzlesList:
+        """Return a list of crossword puzzles, including the user's progress.
+
+        `publish_type` is daily, mini or bonus. NYT returns at most 100 puzzles
+        per request, and incomplete or empty results for long ranges, so use
+        ranges of 90 days or less. NYT's list doesn't include Midi puzzles (it returns Daily
+        puzzles instead), so `midi` raises ValueError; use
+        archive("crossword_midi", ...) and crossword_game() for Midi puzzles.
+        """
+        if publish_type is not None:
+            publish_type = CrosswordPublishType(publish_type).value
+            if publish_type == CrosswordPublishType.midi.value:
+                raise ValueError(
+                    "NYT's crossword list doesn't include Midi puzzles; "
+                    'use archive("crossword_midi", ...) and crossword_game() instead'
+                )
+        params = {
+            "publish_type": publish_type,
+            "sort_order": sort_order,
+            "sort_by": sort_by,
+            "date_start": date_start,
+            "date_end": date_end,
+        }
+        return CrosswordPuzzlesList(**(yield Request("/svc/crosswords/v3/puzzles.json", params=params)))
+
+    def crossword_game(
+        self,
+        puzzle_id: PuzzleIds,
+        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
+    ) -> CrosswordGame:
+        """Return the user's saved game state for one or more crossword puzzles.
+
+        `puzzle_id` is a puzzle ID, a comma separated string or a list of up
+        to 30 IDs. `states` only includes puzzles the user has played.
+        """
+        publish_type = CrosswordPublishType(publish_type).value
+        response = (yield Request(
+            f"/svc/games/state/crossword_{publish_type}/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_id)},
+        ))
+        return CrosswordGame(**response)
+
+    def crossword_oracle(
+        self,
+        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
+    ) -> CrosswordOracle:
+        """Return the current and next crossword puzzle (daily, mini or midi)."""
+        publish_type = CrosswordPublishType(publish_type).value
+        return CrosswordOracle(**(yield Request(f"/svc/crosswords/v2/oracle/{publish_type}.json")))
+
+    # Player
+    def player_stats(self) -> Player:
+        """Return the user's stats for every game they have played.
+
+        Requires the NYT-S cookie. Includes the user's NYT user ID. Raises
+        NYTGamesNoProfileError for accounts that have never played a game
+        while signed in, which have no NYT Games profile yet.
+        """
+        response = (yield Request(
+            "/svc/games/state/wordleV2/latests",
+            params={"puzzle_ids": "0"},
+        ))
+        if not isinstance(response, dict) or not response.get("player"):
+            raise NYTGamesNoProfileError(
+                "This NYT account has no NYT Games profile yet; NYT creates one when the "
+                "account first plays a game while signed in"
+            )
+        return Player(**response["player"])
+
+    # Letter Boxed
+    def letter_boxed(self, date: str) -> LetterBoxedPuzzle:
+        """Return the Letter Boxed puzzle for a date (YYYY-MM-DD).
+
+        Puzzles are available from 2018-12-17, and NYT also serves the next day
+        or two ahead of time. A few early dates have no puzzle (2018-12-21 to
+        2019-01-05 and 2019-01-25) and raise NYTGamesNotFoundError.
+        """
+        return LetterBoxedPuzzle(**(yield Request(f"/svc/letter-boxed/v1/{date}.json")))
+
+    # Spelling Bee
+    def spelling_bee(self) -> SpellingBeeGameData:
+        """Return the current Spelling Bee data scraped from the game page.
+
+        Raises ValueError if the page does not contain the game data.
+        """
+        response = (yield Request("/puzzles/spelling-bee", json_response=False))
+        game_data = get_game_data(response.content)
+        if game_data is None:
+            raise NYTGamesParseError("Spelling Bee game data not found in the page")
+        return SpellingBeeGameData(**game_data)
+
+    def spelling_bee_puzzle(self, date: str) -> SpellingBeeGameDay:
+        """Return the Spelling Bee puzzle for a date (YYYY-MM-DD).
+
+        Puzzles are available from 2018-05-06, and NYT also serves the next
+        day ahead of time. The result has the same shape as the game page
+        puzzles from spelling_bee_puzzles(), including the full word list, so
+        it works with spelling_bee_hints(). Dates without a puzzle raise
+        NYTGamesNotFoundError.
+        """
+        response = (yield Request(f"/svc/spelling-bee/v1/{date}.json"))
+        return SpellingBeePuzzle(**response).to_game_day()
+
+    def spelling_bee_puzzles(self) -> dict[str, SpellingBeeGameDay]:
+        """Return every Spelling Bee puzzle on the game page, keyed by print date.
+
+        The page includes today's puzzle and the puzzles back to the start of
+        last week (about two weeks). Older puzzles are not available.
+        """
+        game_data = (yield from _Operations.spelling_bee(self))
+        past = game_data.pastPuzzles
+        puzzles = [game_data.today, game_data.yesterday, *past.thisWeek, *past.lastWeek]
+        return {puzzle.printDate: puzzle for puzzle in sorted(puzzles, key=lambda p: p.printDate)}
+
+    def spelling_bee_latest(self, puzzle_ids: PuzzleIds = None) -> SpellingBeeLatest:
+        """Return the user's latest Spelling Bee game states.
+
+        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
+        to 30 IDs (NYT returns HTTP 400 for more). With no IDs, `states` is
+        empty.
+        """
+        response = (yield Request(
+            "/svc/games/state/spelling_bee/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
+        ))
+        return SpellingBeeLatest(**response)
+
+    # Strands
+    def strands(self, date: str) -> StrandsPuzzle:
+        """Return the Strands puzzle for a date (YYYY-MM-DD)."""
+        return StrandsPuzzle(**(yield Request(f"/svc/strands/v2/{date}.json")))
+
+    def strands_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> StrandsLatest:
+        """Return the user's latest Strands game states.
+
+        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
+        to 30 IDs. `states` only includes puzzles the user has played. Set
+        `bonus` for bonus puzzles (Colorful Strands).
+        """
+        game = "strands_bonus" if bonus else "strands"
+        response = (yield Request(
+            f"/svc/games/state/{game}/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
+        ))
+        return StrandsLatest(**response)
+
+    # Wordle
+    def wordlebot(self) -> WordleBotAnalysis | None:
+        """Return your WordleBot analysis of today's Wordle, or None.
+
+        Needs cookies. NYT only keeps today's game, and only after you've
+        opened WordleBot; earlier games aren't available. When there are
+        several (one each time you open WordleBot), the latest is returned.
+        """
+        entries = (yield Request(WORDLEBOT_URL))
+        analyses = [
+            WordleBotAnalysis(**entry["content"], created_at=entry.get("created_at"),
+                              response_id=entry.get("response_id"))
+            for entry in entries
+            if isinstance(entry.get("content"), dict) and entry["content"].get("guesses")
+        ]
+        return max(analyses, key=lambda a: a.created_at or "", default=None)
+
+    def wordlebot_summary(self, date: str, solution: str | None = None) -> WordleBotSummary:
+        """Return WordleBot's summary of how everyone did on a day's Wordle.
+
+        Available for every day since the first Wordle (2021-06-19). The files
+        are named by solution, so this also fetches the day's Wordle unless
+        `solution` is given. Doesn't need cookies.
+        """
+        solution = solution or (yield from _Operations.wordle(self, date)).solution
+        return WordleBotSummary(**(yield Request(WORDLEBOT_SUMMARY_URL.format(solution=solution, date=date))))
+
+    def wordle(self, date: str) -> WordlePuzzle:
+        """Return the Wordle puzzle for a date (YYYY-MM-DD)."""
+        return WordlePuzzle(**(yield Request(f"/svc/wordle/v2/{date}.json")))
+
+    def wordle_latest(self, puzzle_ids: PuzzleIds = None) -> WordlePuzzlesList:
+        """Return the user's latest Wordle game states.
+
+        `puzzle_ids` is a puzzle ID, a comma separated string or a list of IDs.
+        """
+        response = (yield Request(
+            "/svc/games/state/wordleV2/latests",
+            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
+        ))
+        return WordlePuzzlesList(**response)
+
+
+class NYTGamesClient(_Operations):
     """Client for the NYT Games APIs.
 
     Subscriber content and user game state require the `NYT-S` session cookie
@@ -193,22 +582,8 @@ class NYTGamesClient:
         self.base_url = base_url.rstrip("/")
 
     def _get(self, path: str, params: dict | None = None, json_response: bool = True):
-        """Return the response from a GET request to NYT.
-
-        `path` is relative to `base_url`, or a full URL. Cookies are only sent
-        to `base_url` and www.nytimes.com, never to other hosts such as NYT's
-        static file server.
-        """
-        headers = {"User-Agent": self.user_agent}
-        if json_response:
-            headers["Accept"] = "application/json"
-        if params:
-            params = {k: v for k, v in params.items() if v is not None}
-        if path.startswith("https://"):
-            url = path
-            send_cookies = path.startswith((self.base_url + "/", NYT_BASE_URL + "/"))
-        else:
-            url, send_cookies = f"{self.base_url}{path}", True
+        """Return the response from a GET request to NYT (see `_prepare`)."""
+        url, headers, params, send_cookies = self._prepare(path, params, json_response)
         response = self.session.get(
             url,
             cookies=self.cookies if send_cookies else None,
@@ -220,381 +595,111 @@ class NYTGamesClient:
         try:
             response.raise_for_status()
         except requests.HTTPError as err:
-            if response.status_code == 429:
-                raise NYTGamesRateLimitError(
-                    str(err), response=response, retry_after=retry_after(response)
-                ) from err
-            error_class = {
-                401: NYTGamesAuthenticationError,
-                403: NYTGamesAuthenticationError,
-                404: NYTGamesNotFoundError,
-            }.get(response.status_code, NYTGamesHTTPError)
-            raise error_class(str(err), response=response) from err
+            raise http_error(str(err), response) from err
         return response.json() if json_response else response
 
-    # Archive
-    def archive(
+
+class AsyncNYTGamesClient(_Operations):
+    """Asyncio client for the NYT Games APIs: the same methods as
+    `NYTGamesClient`, awaited. Needs the `async` extra
+    (`pip install "nytimes-games[async]"`), which adds httpx.
+
+        async with AsyncNYTGamesClient(cookies=...) as client:
+            puzzle = await client.wordle("2026-10-11")
+
+    Errors are the same NYTGamesHTTPError subclasses, with an
+    `httpx.Response` as `.response`. Failed connections, rate limits (429)
+    and NYT server errors are retried up to `retries` times with exponential
+    backoff, honoring Retry-After. Pass your own `httpx.AsyncClient` as
+    `http_client` to control transport details; it's used as is (with these
+    retries) and not closed by `aclose()`.
+    """
+
+    def __init__(
         self,
-        game: ArchiveGame | str,
-        date_start: str,
-        date_end: str,
-    ) -> list[ArchivePuzzle]:
-        """Return the puzzles published between two dates (YYYY-MM-DD), inclusive.
+        cookies: Cookies = None,
+        http_client: "httpx.AsyncClient | None" = None,
+        timeout: float = 30,
+        user_agent: str = USER_AGENT,
+        retries: int = 3,
+        backoff: float = 0.5,
+        base_url: str = NYT_BASE_URL,
+    ):
+        try:
+            import httpx
+        except ImportError:
+            raise ImportError(
+                'AsyncNYTGamesClient needs httpx: pip install "nytimes-games[async]"'
+            ) from None
+        self.cookies = parse_cookies(cookies)
+        self.timeout = timeout
+        self.user_agent = user_agent
+        self.retries = retries
+        self.backoff = backoff
+        self.base_url = base_url.rstrip("/")
+        self._owns_http = http_client is None
+        self.http_client = http_client or httpx.AsyncClient(follow_redirects=True)
 
-        `game` is connections, strands, wordle, crossword_daily, crossword_mini
-        or crossword_midi. Each puzzle has its ID and print date, so this is the
-        quickest way to find puzzle IDs for the game state methods. Doesn't
-        need cookies. Future dates are not included.
-
-        A few dates have two puzzles (such as 2022-12-31's daily and its 50x50
-        Supermega); both are returned, so print dates can repeat.
-
-        NYT returns at most 31 puzzles per request, so ranges are fetched 31
-        days at a time, and a window that hits the limit is split and fetched
-        again so no date is dropped.
-        """
-        game = ArchiveGame(game).value
-        start = datetime.date.fromisoformat(date_start)
-        end = datetime.date.fromisoformat(date_end)
-        puzzles: dict[int, ArchivePuzzle] = {}
-        while start <= end:
-            window_end = min(start + datetime.timedelta(days=ARCHIVE_DAYS - 1), end)
-            for puzzle in self._archive_window(game, start, window_end):
-                puzzles.setdefault(puzzle.id, puzzle)
-            start = window_end + datetime.timedelta(days=1)
-        return sorted(puzzles.values(), key=lambda puzzle: (puzzle.print_date, puzzle.id))
-
-    def _archive_window(self, game: str, start: datetime.date, end: datetime.date) -> list[ArchivePuzzle]:
-        """Fetch one window, splitting it if NYT's 31 puzzle limit may have cut it short."""
-        response = self._get(f"/svc/games/v1/archive/{game}/{start}/{end}")
-        if len(response) < ARCHIVE_DAYS or start == end:
-            return [ArchivePuzzle(**puzzle) for puzzle in response]
-        middle = start + (end - start) // 2
-        return (self._archive_window(game, start, middle)
-                + self._archive_window(game, middle + datetime.timedelta(days=1), end))
-
-    # Badges
-    def trophy_case(self, game: BadgeGame | str) -> TrophyCase:
-        """Return every badge for a game, earned or not, with your progress.
-
-        `game` is wordleV2, connections, strands or spelling_bee. Requires
-        the NYT-S cookie. This is the NYT Games app's trophy case; the saved
-        game state methods only include the three badges on your shelf.
-        """
-        game = BadgeGame(game).value
-        return TrophyCase(**self._get(f"/svc/games/badges/trophy-case/{game}"))
-
-    def badges(self, games: Iterable[BadgeGame | str] = BADGE_GAMES) -> TrophyCase:
-        """Return every badge for each game (default: all four), in one
-        TrophyCase keyed by game. Makes one request per game.
-
-        Names, descriptions and artwork are in each badge's `info`.
-        """
-        result = TrophyCase()
-        for game in games:
-            case = self.trophy_case(game)
-            result.user_id = result.user_id or case.user_id
-            result.trophies.update(case.trophies)
-        return result
-
-    # Bonus Puzzles
-    def bonus_week(self, date: str) -> BonusWeek:
-        """Return the week's Bonus Puzzles drop that includes a date (YYYY-MM-DD).
-
-        Drops come out on Wednesdays, starting 2026-08-26 (earlier dates
-        return that first week), and NYT serves the next week's drop early.
-        """
-        response = self._get(f"/svc/games/bonus/week/v1/{date}.json")
-        if not isinstance(response, dict) or not isinstance(response.get("bonus_puzzles_week"), dict):
-            raise NYTGamesParseError("NYT's bonus week response has no bonus_puzzles_week")
-        return BonusWeek(**response["bonus_puzzles_week"])
-
-    def bonus_weeks(self, date_start: str, date_end: str) -> list[BonusWeek]:
-        """Return each week's Bonus Puzzles drop between two dates, oldest
-        first, up to the latest published week. Makes one request per week."""
-        weeks = [self.bonus_week(date_start)]
+    async def _get(self, path: str, params: dict | None = None, json_response: bool = True):
+        """Return the response from a GET request to NYT (see `_prepare`)."""
+        import httpx
+        url, headers, params, send_cookies = self._prepare(path, params, json_response)
+        if send_cookies and self.cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        attempt = 0
         while True:
-            next_drop = weeks[-1].next_drop
-            if not next_drop or next_drop > date_end or next_drop <= weeks[-1].drop_date:
-                return weeks
             try:
-                week = self.bonus_week(next_drop)
-            except NYTGamesNotFoundError:  # not published yet
-                return weeks
-            if week.drop_date <= weeks[-1].drop_date:
-                return weeks
-            weeks.append(week)
+                response = await self.http_client.get(url, headers=headers, params=params, timeout=self.timeout)
+            except httpx.TransportError:
+                if attempt >= self.retries:
+                    raise
+                response = None
+            else:
+                if response.status_code not in RETRY_STATUSES or attempt >= self.retries:
+                    break
+            wait = self.backoff * 2 ** attempt
+            if response is not None:
+                wait = max(wait, retry_after(response) or 0)
+            await asyncio.sleep(min(wait, 60))
+            attempt += 1
+        logger.info("GET %s", response.request.url)
+        if response.status_code >= 400:
+            raise http_error(f"{response.status_code} Error: {response.reason_phrase} for url: {response.url}",
+                             response)
+        return response.json() if json_response else response
 
-    def bonus_puzzle(self, listing: BonusPuzzleListing):
-        """Return a bonus puzzle from its listing in a BonusWeek: a
-        WordleInOnePuzzle, ConnectionsPuzzle, StrandsPuzzle or CrosswordPuzzle."""
-        fetch = {"wordle-in-one": self.wordle_in_one, "connections": self.connections_bonus,
-                 "strands": self.strands_bonus}.get(listing.game)
-        if fetch:
-            return fetch(listing.slug)
-        if listing.game == "crossword":
-            return self.crossword_by_id(listing.id)
-        raise ValueError(f"Unknown bonus puzzle game: {listing.game}")
+    async def aclose(self) -> None:
+        """Close the httpx client, unless you passed in your own."""
+        if self._owns_http:
+            await self.http_client.aclose()
 
-    def wordle_in_one(self, slug: str) -> WordleInOnePuzzle:
-        """Return a Wordle in 1 bonus puzzle by its slug (e.g. 2026-10-07-8)."""
-        return WordleInOnePuzzle(**self._get(f"/svc/wordle-in-one/v1/bonus/{slug}.json"))
+    async def __aenter__(self):
+        return self
 
-    def connections_bonus(self, slug: str) -> ConnectionsPuzzle:
-        """Return a Connections bonus puzzle (Connections 3x3) by its slug."""
-        return ConnectionsPuzzle(**self._get(f"/svc/connections/v2/bonus/{slug}.json"))
+    async def __aexit__(self, *exc):
+        await self.aclose()
 
-    def strands_bonus(self, slug: str) -> StrandsPuzzle:
-        """Return a Strands bonus puzzle (Colorful Strands) by its slug."""
-        return StrandsPuzzle(**self._get(f"/svc/strands/v2/bonus/{slug}.json"))
 
-    def wordle_in_one_latest(self, puzzle_ids: PuzzleIds = None) -> WordleInOneLatest:
-        """Return the user's saved Wordle in 1 games.
+def _public_operations():
+    for name, value in vars(_Operations).items():
+        if not name.startswith("_") and inspect.isgeneratorfunction(value):
+            yield name, value
 
-        `puzzle_ids` is a puzzle ID (the listing's `id`), a comma separated
-        string or a list of up to 30 IDs. `states` only includes puzzles the
-        user has played.
-        """
-        response = self._get(
-            "/svc/games/state/wordle_in_one/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
-        )
-        return WordleInOneLatest(**response)
 
-    # Connections
-    def connections(self, date: str) -> ConnectionsPuzzle:
-        """Return the Connections puzzle for a date (YYYY-MM-DD)."""
-        return ConnectionsPuzzle(**self._get(f"/svc/connections/v2/{date}.json"))
+def _sync_method(operation):
+    @functools.wraps(operation)
+    def method(self, *args, **kwargs):
+        return run_sync(self._get, operation(self, *args, **kwargs))
+    return method
 
-    def connections_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> ConnectionsLatest:
-        """Return the user's latest Connections game states.
 
-        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
-        to 30 IDs. `states` only includes puzzles the user has played. Set
-        `bonus` for bonus puzzles (Connections 3x3).
-        """
-        game = "connections_bonus" if bonus else "connections"
-        response = self._get(
-            f"/svc/games/state/{game}/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
-        )
-        return ConnectionsLatest(**response)
+def _async_method(operation):
+    @functools.wraps(operation)
+    async def method(self, *args, **kwargs):
+        return await run_async(self._get, operation(self, *args, **kwargs))
+    return method
 
-    # Crosswords
-    def crossword(
-        self,
-        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
-        date: str | None = None,
-    ) -> CrosswordPuzzle:
-        """Return a crossword puzzle.
 
-        `publish_type` is one of daily, mini, midi or bonus. Returns today's
-        puzzle if `date` is not set (bonus puzzles require a date).
-        """
-        publish_type = CrosswordPublishType(publish_type).value
-        path = f"/svc/crosswords/v6/puzzle/{publish_type}"
-        path = f"{path}/{date}.json" if date else f"{path}.json"
-        return CrosswordPuzzle(**self._get(path))
-
-    def crossword_by_id(self, puzzle_id: int | str) -> CrosswordPuzzle:
-        """Return a crossword of any type by its puzzle ID.
-
-        Use it for dates with more than one puzzle, where crossword(date)
-        returns only one of them (archive() lists both).
-        """
-        return CrosswordPuzzle(**self._get(f"/svc/crosswords/v6/puzzle/{puzzle_id}.json"))
-
-    def crossword_puzzles(
-        self,
-        publish_type: CrosswordPublishType | str | None = None,
-        sort_order: str | None = None,
-        sort_by: str | None = None,
-        date_start: str | None = None,
-        date_end: str | None = None,
-    ) -> CrosswordPuzzlesList:
-        """Return a list of crossword puzzles, including the user's progress.
-
-        `publish_type` is daily, mini or bonus. NYT returns at most 100 puzzles
-        per request, and incomplete or empty results for long ranges, so use
-        ranges of 90 days or less. NYT's list doesn't include Midi puzzles (it returns Daily
-        puzzles instead), so `midi` raises ValueError; use
-        archive("crossword_midi", ...) and crossword_game() for Midi puzzles.
-        """
-        if publish_type is not None:
-            publish_type = CrosswordPublishType(publish_type).value
-            if publish_type == CrosswordPublishType.midi.value:
-                raise ValueError(
-                    "NYT's crossword list doesn't include Midi puzzles; "
-                    'use archive("crossword_midi", ...) and crossword_game() instead'
-                )
-        params = {
-            "publish_type": publish_type,
-            "sort_order": sort_order,
-            "sort_by": sort_by,
-            "date_start": date_start,
-            "date_end": date_end,
-        }
-        return CrosswordPuzzlesList(**self._get("/svc/crosswords/v3/puzzles.json", params=params))
-
-    def crossword_game(
-        self,
-        puzzle_id: PuzzleIds,
-        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
-    ) -> CrosswordGame:
-        """Return the user's saved game state for one or more crossword puzzles.
-
-        `puzzle_id` is a puzzle ID, a comma separated string or a list of up
-        to 30 IDs. `states` only includes puzzles the user has played.
-        """
-        publish_type = CrosswordPublishType(publish_type).value
-        response = self._get(
-            f"/svc/games/state/crossword_{publish_type}/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_id)},
-        )
-        return CrosswordGame(**response)
-
-    def crossword_oracle(
-        self,
-        publish_type: CrosswordPublishType | str = CrosswordPublishType.daily,
-    ) -> CrosswordOracle:
-        """Return the current and next crossword puzzle (daily, mini or midi)."""
-        publish_type = CrosswordPublishType(publish_type).value
-        return CrosswordOracle(**self._get(f"/svc/crosswords/v2/oracle/{publish_type}.json"))
-
-    # Player
-    def player_stats(self) -> Player:
-        """Return the user's stats for every game they have played.
-
-        Requires the NYT-S cookie. Includes the user's NYT user ID. Raises
-        NYTGamesNoProfileError for accounts that have never played a game
-        while signed in, which have no NYT Games profile yet.
-        """
-        response = self._get(
-            "/svc/games/state/wordleV2/latests",
-            params={"puzzle_ids": "0"},
-        )
-        if not isinstance(response, dict) or not response.get("player"):
-            raise NYTGamesNoProfileError(
-                "This NYT account has no NYT Games profile yet; NYT creates one when the "
-                "account first plays a game while signed in"
-            )
-        return Player(**response["player"])
-
-    # Letter Boxed
-    def letter_boxed(self, date: str) -> LetterBoxedPuzzle:
-        """Return the Letter Boxed puzzle for a date (YYYY-MM-DD).
-
-        Puzzles are available from 2018-12-17, and NYT also serves the next day
-        or two ahead of time. A few early dates have no puzzle (2018-12-21 to
-        2019-01-05 and 2019-01-25) and raise NYTGamesNotFoundError.
-        """
-        return LetterBoxedPuzzle(**self._get(f"/svc/letter-boxed/v1/{date}.json"))
-
-    # Spelling Bee
-    def spelling_bee(self) -> SpellingBeeGameData:
-        """Return the current Spelling Bee data scraped from the game page.
-
-        Raises ValueError if the page does not contain the game data.
-        """
-        response = self._get("/puzzles/spelling-bee", json_response=False)
-        game_data = get_game_data(response.content)
-        if game_data is None:
-            raise NYTGamesParseError("Spelling Bee game data not found in the page")
-        return SpellingBeeGameData(**game_data)
-
-    def spelling_bee_puzzle(self, date: str) -> SpellingBeeGameDay:
-        """Return the Spelling Bee puzzle for a date (YYYY-MM-DD).
-
-        Puzzles are available from 2018-05-06, and NYT also serves the next
-        day ahead of time. The result has the same shape as the game page
-        puzzles from spelling_bee_puzzles(), including the full word list, so
-        it works with spelling_bee_hints(). Dates without a puzzle raise
-        NYTGamesNotFoundError.
-        """
-        response = self._get(f"/svc/spelling-bee/v1/{date}.json")
-        return SpellingBeePuzzle(**response).to_game_day()
-
-    def spelling_bee_puzzles(self) -> dict[str, SpellingBeeGameDay]:
-        """Return every Spelling Bee puzzle on the game page, keyed by print date.
-
-        The page includes today's puzzle and the puzzles back to the start of
-        last week (about two weeks). Older puzzles are not available.
-        """
-        game_data = self.spelling_bee()
-        past = game_data.pastPuzzles
-        puzzles = [game_data.today, game_data.yesterday, *past.thisWeek, *past.lastWeek]
-        return {puzzle.printDate: puzzle for puzzle in sorted(puzzles, key=lambda p: p.printDate)}
-
-    def spelling_bee_latest(self, puzzle_ids: PuzzleIds = None) -> SpellingBeeLatest:
-        """Return the user's latest Spelling Bee game states.
-
-        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
-        to 30 IDs (NYT returns HTTP 400 for more). With no IDs, `states` is
-        empty.
-        """
-        response = self._get(
-            "/svc/games/state/spelling_bee/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
-        )
-        return SpellingBeeLatest(**response)
-
-    # Strands
-    def strands(self, date: str) -> StrandsPuzzle:
-        """Return the Strands puzzle for a date (YYYY-MM-DD)."""
-        return StrandsPuzzle(**self._get(f"/svc/strands/v2/{date}.json"))
-
-    def strands_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> StrandsLatest:
-        """Return the user's latest Strands game states.
-
-        `puzzle_ids` is a puzzle ID, a comma separated string or a list of up
-        to 30 IDs. `states` only includes puzzles the user has played. Set
-        `bonus` for bonus puzzles (Colorful Strands).
-        """
-        game = "strands_bonus" if bonus else "strands"
-        response = self._get(
-            f"/svc/games/state/{game}/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
-        )
-        return StrandsLatest(**response)
-
-    # Wordle
-    def wordlebot(self) -> WordleBotAnalysis | None:
-        """Return your WordleBot analysis of today's Wordle, or None.
-
-        Needs cookies. NYT only keeps today's game, and only after you've
-        opened WordleBot; earlier games aren't available. When there are
-        several (one each time you open WordleBot), the latest is returned.
-        """
-        entries = self._get(WORDLEBOT_URL)
-        analyses = [
-            WordleBotAnalysis(**entry["content"], created_at=entry.get("created_at"),
-                              response_id=entry.get("response_id"))
-            for entry in entries
-            if isinstance(entry.get("content"), dict) and entry["content"].get("guesses")
-        ]
-        return max(analyses, key=lambda a: a.created_at or "", default=None)
-
-    def wordlebot_summary(self, date: str, solution: str | None = None) -> WordleBotSummary:
-        """Return WordleBot's summary of how everyone did on a day's Wordle.
-
-        Available for every day since the first Wordle (2021-06-19). The files
-        are named by solution, so this also fetches the day's Wordle unless
-        `solution` is given. Doesn't need cookies.
-        """
-        solution = solution or self.wordle(date).solution
-        return WordleBotSummary(**self._get(WORDLEBOT_SUMMARY_URL.format(solution=solution, date=date)))
-
-    def wordle(self, date: str) -> WordlePuzzle:
-        """Return the Wordle puzzle for a date (YYYY-MM-DD)."""
-        return WordlePuzzle(**self._get(f"/svc/wordle/v2/{date}.json"))
-
-    def wordle_latest(self, puzzle_ids: PuzzleIds = None) -> WordlePuzzlesList:
-        """Return the user's latest Wordle game states.
-
-        `puzzle_ids` is a puzzle ID, a comma separated string or a list of IDs.
-        """
-        response = self._get(
-            "/svc/games/state/wordleV2/latests",
-            params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
-        )
-        return WordlePuzzlesList(**response)
+for _name, _operation in _public_operations():
+    setattr(NYTGamesClient, _name, _sync_method(_operation))
+    setattr(AsyncNYTGamesClient, _name, _async_method(_operation))

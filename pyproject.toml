@@ -36,6 +36,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Games/Entertainment :: Puzzle Games",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -46,6 +47,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+async = ["httpx>=0.27"]
 api = ["fastapi>=0.111", "uvicorn>=0.30"]
 mcp = ["mcp>=2.3"]
 cli = [
