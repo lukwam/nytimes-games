@@ -115,3 +115,16 @@ def test_api_routes():
     with mock.patch.object(api.NYTGamesClient, "_get",
                            side_effect=[{"id": 1, "print_date": "2026-10-04", "solution": "shack"}, SUMMARY]):
         assert TestClient(api.app).get("/wordlebot/2026-10-04/summary").json()["average"]["hard"] == 3.93
+
+
+
+def test_summary_with_null_percentiles():
+    """Early summaries (2021 to early 2022) have null percentiles for a mode."""
+    from nytgames.views import skill_rank
+    from nytgames.views import wordlebot_view
+    summary = WordleBotSummary(**{**SUMMARY, "percentiles": {"normal-ps": None, "hard-ps": None, "hard": None}})
+    assert summary.percentiles["hard-ps"] is None
+    data = wordlebot_view(datetime.date(2021, 6, 30), WordlePuzzle(id=10, print_date="2021-06-30", solution="shack"),
+                          summary)
+    assert data["mode"] == "normal" and data["everyone"]["average_guesses"] == 4.08
+    assert skill_rank(0.93, summary.percentiles["hard"]) is None

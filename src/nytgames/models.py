@@ -929,5 +929,6 @@ class WordleBotSummary(NYTModel):
     botUserSteps: Dict[str, Any] | None = None
     unsolvedPenalty: Dict[str, float | None] | None = None
     percentSolvingInThreeOrFewer: Dict[str, float | None] | None = None
-    percentiles: Dict[str, Dict[str, float]] | None = None
+    # A mode is null on days before it had percentiles (2021 and early 2022).
+    percentiles: Dict[str, Dict[str, float | None] | None] | None = None
     guesses: Dict[str, List[str]] | None = None
