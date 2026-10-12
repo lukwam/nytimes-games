@@ -356,7 +356,7 @@ nytg archive connections --from first --out puzzles/
 ```
 
 saves each date as `puzzles/connections/YYYY-MM-DD.json`. For the few dates
-with two crosswords (such as 2022-12-31's daily and its 50x50 Supermega), each
+with two crosswords (a special puzzle alongside the daily), each
 is saved as `YYYY-MM-DD-ID.json`. Run it again to
 resume: saved dates are skipped. A `manifest.json` records when each file was
 fetched, NYT's update time and a hash; with `--overwrite`, puzzles NYT has

@@ -48,7 +48,7 @@ def archive_items(client: NYTGamesClient, game: ArchiveGame, days: list) -> tupl
 
     Most games have one puzzle per date, fetched by date. Crosswords are listed
     from the games archive and fetched by ID, because a few dates have two
-    (such as 2022-12-31's daily and its Supermega); those are saved as
+    (special puzzles alongside a daily); those are saved as
     YYYY-MM-DD-ID files. Future dates, which the archive doesn't list yet,
     are fetched by date.
     """

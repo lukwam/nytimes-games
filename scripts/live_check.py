@@ -104,9 +104,10 @@ def checks(client: NYTGamesClient, today: datetime.date) -> list[tuple[str, Call
                   for game in ("wordle", "connections", "strands", "crossword_daily",
                                "crossword_mini", "crossword_midi")}
         assert all(counts.values()), counts
-        # December 2022 has 32 dailies (two on the 31st), over NYT's 31 per request.
-        december = client.archive("crossword_daily", "2022-12-01", "2022-12-31")
-        assert len(december) == 32 and december[0].print_date == "2022-12-01", len(december)
+        # Two months of dailies, over NYT's 31 per request: one per day, none dropped.
+        winter = client.archive("crossword_daily", "2022-12-01", "2023-01-31")
+        dates = [puzzle.print_date for puzzle in winter]
+        assert len(set(dates)) == 62 and dates[0] == "2022-12-01" and dates[-1] == "2023-01-31", len(dates)
         return ", ".join(f"{game} {n}" for game, n in counts.items())
 
     def crossword_list() -> str:

@@ -161,8 +161,8 @@ class _Operations:
         quickest way to find puzzle IDs for the game state methods. Doesn't
         need cookies. Future dates are not included.
 
-        A few dates have two puzzles (such as 2022-12-31's daily and its 50x50
-        Supermega); both are returned, so print dates can repeat.
+        A date can have two puzzles (a special puzzle alongside the daily);
+        both are returned, so print dates can repeat.
 
         NYT returns at most 31 puzzles per request, so ranges are fetched 31
         days at a time, and a window that hits the limit is split and fetched
