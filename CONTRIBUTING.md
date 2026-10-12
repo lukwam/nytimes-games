@@ -73,6 +73,9 @@ docs/                endpoints.md: the endpoints, limits and quirks behind each 
                      README screenshot, regenerated with docs/make_screenshot.py
 ```
 
+Fixtures used by one test file live in that file; once a second file needs
+them, move them to `tests/conftest.py`.
+
 ## How the client works
 
 Each client method is a generator in `_Operations` that yields
