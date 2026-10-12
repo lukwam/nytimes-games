@@ -30,8 +30,9 @@ answers 404.
   - `/svc/crosswords/v6/puzzle/{type}.json`, with no date, is today's puzzle.
     Bonus puzzles need a date.
   - `/svc/crosswords/v6/puzzle/{id}.json` gets any crossword by its ID.
-    That's the only way to get both puzzles on a date that has two, such as
-    2022-12-31's daily and its 50x50 Supermega.
+    That's the only way to get both puzzles on a date that has two. NYT
+    has removed its best-known example, 2022-12-31's 50x50 Supermega (its ID
+    now answers 404), but the archive can still list two puzzles for a date.
   - `/svc/crosswords/v2/oracle/{type}.json` has the current and next
     puzzle's IDs and publish times.
 - **Spelling Bee's game page:** `/puzzles/spelling-bee` has a

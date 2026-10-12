@@ -32,6 +32,9 @@ versions may include breaking changes.
 
 - The REST API closes its NYT client after each request instead of leaving
   the connection pool to garbage collection.
+- The nightly live check expected 32 dailies in December 2022, but NYT no
+  longer serves 2022-12-31's Supermega. It now checks that two months of
+  dailies, more than one request's worth, come back with none dropped.
 
 ## 0.10.0 (2026-10-12)
 
