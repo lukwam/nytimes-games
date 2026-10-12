@@ -1,16 +1,23 @@
 """NYT Games exceptions."""
-import requests
+import httpx
 
 
 class NYTGamesError(Exception):
     """Base class for NYT Games errors."""
 
 
-class NYTGamesHTTPError(NYTGamesError, requests.HTTPError):
+class NYTGamesHTTPError(NYTGamesError):
     """NYT returned an HTTP error.
 
-    Subclasses requests.HTTPError, so code that catches that keeps working.
+    `status_code` is the HTTP status, and `response` is the `httpx.Response`,
+    when there is one.
     """
+
+    def __init__(self, message: str, status_code: int | None = None,
+                 response: httpx.Response | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response = response
 
 
 class NYTGamesAuthenticationError(NYTGamesHTTPError):

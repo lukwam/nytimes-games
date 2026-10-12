@@ -1,20 +1,20 @@
-"""NYT Games client."""
-import asyncio
+"""NYT Games clients.
+
+`NYTGamesClient` is synchronous and `AsyncNYTGamesClient` is its asyncio
+twin: same methods, same arguments, same results, but awaited. Both run the
+operations defined once in `_Operations`.
+"""
 import datetime
 import functools
 import inspect
 import json
-import logging
 import re
-from typing import TYPE_CHECKING
 from typing import Any
 from typing import Iterable
 from typing import Mapping
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from nytgames import __version__
 from nytgames.exceptions import NYTGamesNoProfileError
@@ -47,19 +47,12 @@ from nytgames.models import WordleInOneLatest
 from nytgames.models import WordleInOnePuzzle
 from nytgames.models import WordlePuzzle
 from nytgames.models import WordlePuzzlesList
-from nytgames.transport import RETRY_STATUSES
+from nytgames.transport import NYT_BASE_URL
 from nytgames.transport import Request
-from nytgames.transport import http_error
-from nytgames.transport import retry_after  # noqa: F401  (public before transport.py)
+from nytgames.transport import Settings
 from nytgames.transport import run_async
 from nytgames.transport import run_sync
 
-if TYPE_CHECKING:
-    import httpx
-
-logger = logging.getLogger(__name__)
-
-NYT_BASE_URL = "https://www.nytimes.com"
 WORDLEBOT_URL = "https://www.nytimes.com/svc/int/run/cubby/public-api/v1/responses/wordlebot/reader"
 WORDLEBOT_SUMMARY_URL = "https://static01.nyt.com/newsgraphics/2022/wordlebot/{solution}-{date}/summary.json"
 # NYT's games archive returns at most 31 days per request.
@@ -130,25 +123,7 @@ def check_cookies(cookies: dict[str, str]) -> dict[str, str]:
     return cookies
 
 
-def retrying_session(retries: int = 3, backoff: float = 0.5) -> requests.Session:
-    """Return a session that retries failed requests with exponential backoff."""
-    session = requests.Session()
-    if retries:
-        retry = Retry(
-            total=retries,
-            backoff_factor=backoff,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=("GET",),
-            respect_retry_after_header=True,
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
-    return session
-
-
-def get_game_data(body: bytes) -> dict | None:
+def get_game_data(body: str | bytes) -> dict | None:
     """Get Game Data from Spelling Bee Page."""
     soup = BeautifulSoup(body, "html.parser")
     script_tag = soup.find("script", string=re.compile(r"window\.gameData\s*="))
@@ -163,25 +138,14 @@ class _Operations:
     """Every request the clients make, written once as generators (see
     nytgames.transport). NYTGamesClient and AsyncNYTGamesClient run them."""
 
-    cookies: dict[str, str]
-    user_agent: str
-    base_url: str
+    def __init__(self, cookies: Cookies = None, user_agent: str = USER_AGENT, retries: int = 3,
+                 backoff: float = 0.5, base_url: str = NYT_BASE_URL):
+        self._settings = Settings(parse_cookies(cookies), user_agent, retries, backoff, base_url.rstrip("/"))
 
-    def _prepare(self, path: str, params: dict | None, json_response: bool):
-        """Return the URL, headers, params and whether to send cookies for a request.
-
-        `path` is relative to `base_url`, or a full URL. Cookies are only sent
-        to `base_url` and www.nytimes.com, never to other hosts such as NYT's
-        static file server.
-        """
-        headers = {"User-Agent": self.user_agent}
-        if json_response:
-            headers["Accept"] = "application/json"
-        if params:
-            params = {k: v for k, v in params.items() if v is not None}
-        if path.startswith("https://"):
-            return path, headers, params, path.startswith((self.base_url + "/", NYT_BASE_URL + "/"))
-        return f"{self.base_url}{path}", headers, params, True
+    @property
+    def cookies(self) -> dict[str, str]:
+        """The cookies the client sends to NYT, parsed into a dict."""
+        return self._settings.cookies
 
     # Archive
     def archive(
@@ -447,8 +411,8 @@ class _Operations:
 
         Raises ValueError if the page does not contain the game data.
         """
-        response = (yield Request("/puzzles/spelling-bee", json_response=False))
-        game_data = get_game_data(response.content)
+        page = (yield Request("/puzzles/spelling-bee", kind="text"))
+        game_data = get_game_data(page)
         if game_data is None:
             raise NYTGamesParseError("Spelling Bee game data not found in the page")
         return SpellingBeeGameData(**game_data)
@@ -554,128 +518,79 @@ class _Operations:
 class NYTGamesClient(_Operations):
     """Client for the NYT Games APIs.
 
-    Subscriber content and user game state require the `NYT-S` session cookie
-    from a logged in nytimes.com browser session.
+    Puzzles need no cookies. Your stats and saved games need the `NYT-S`
+    cookie from a logged in nytimes.com browser session, in any form
+    `parse_cookies` accepts. Cookies are only sent to www.nytimes.com (or
+    `base_url`), never to other hosts such as static01.nyt.com.
 
-    HTTP errors from NYT are raised as NYTGamesHTTPError (a subclass of
-    `requests.HTTPError`): NYTGamesAuthenticationError for 401 and 403,
-    NYTGamesNotFoundError for 404 and NYTGamesRateLimitError for 429.
+    HTTP errors from NYT are raised as NYTGamesHTTPError:
+    NYTGamesAuthenticationError for 401 and 403, NYTGamesNotFoundError for
+    404 and NYTGamesRateLimitError for 429.
 
-    Failed connections, timeouts, rate limits (429) and NYT server errors
-    (500, 502, 503, 504) are retried up to `retries` times with exponential
-    backoff (`backoff` seconds, doubling each time), honoring NYT's
-    Retry-After header. Retries are only set up on the session the client
-    creates; a `session` you pass in, such as a requests-cache session, is
-    used as is.
+    Failed connections, rate limits (429) and NYT server errors (500, 502,
+    503, 504) are retried up to `retries` times with exponential backoff
+    (`backoff` seconds, doubling each time), honoring NYT's Retry-After
+    header. Pass your own `httpx.Client` as `http_client` to control
+    transport details, such as caching; it's used as is (with these retries)
+    and not closed by `close()`.
     """
 
     def __init__(
         self,
         cookies: Cookies = None,
-        session: requests.Session | None = None,
+        http_client: httpx.Client | None = None,
         timeout: float = 30,
         user_agent: str = USER_AGENT,
         retries: int = 3,
         backoff: float = 0.5,
         base_url: str = NYT_BASE_URL,
     ):
-        self.cookies = parse_cookies(cookies)
-        self.session = session or retrying_session(retries, backoff)
-        self.timeout = timeout
-        self.user_agent = user_agent
-        self.base_url = base_url.rstrip("/")
+        super().__init__(cookies, user_agent, retries, backoff, base_url)
+        self._owns_http = http_client is None
+        self._http = http_client or httpx.Client(timeout=timeout, follow_redirects=True)
 
-    def _get(self, path: str, params: dict | None = None, json_response: bool = True):
-        """Return the response from a GET request to NYT (see `_prepare`)."""
-        url, headers, params, send_cookies = self._prepare(path, params, json_response)
-        response = self.session.get(
-            url,
-            cookies=self.cookies if send_cookies else None,
-            headers=headers,
-            params=params,
-            timeout=self.timeout,
-        )
-        logger.info("GET %s", response.request.url)
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as err:
-            raise http_error(str(err), response) from err
-        return response.json() if json_response else response
+    def close(self) -> None:
+        """Close the httpx client, unless you passed in your own."""
+        if self._owns_http:
+            self._http.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 class AsyncNYTGamesClient(_Operations):
     """Asyncio client for the NYT Games APIs: the same methods as
-    `NYTGamesClient`, awaited. Needs the `async` extra
-    (`pip install "nytimes-games[async]"`), which adds httpx.
+    `NYTGamesClient`, awaited.
 
         async with AsyncNYTGamesClient(cookies=...) as client:
             puzzle = await client.wordle("2026-10-11")
 
-    Errors are the same NYTGamesHTTPError subclasses, with an
-    `httpx.Response` as `.response`. Failed connections, rate limits (429)
-    and NYT server errors are retried up to `retries` times with exponential
-    backoff, honoring Retry-After. Pass your own `httpx.AsyncClient` as
-    `http_client` to control transport details; it's used as is (with these
-    retries) and not closed by `aclose()`.
+    Errors and retries are the same as `NYTGamesClient`'s. Pass your own
+    `httpx.AsyncClient` as `http_client` to control transport details; it's
+    used as is (with these retries) and not closed by `aclose()`.
     """
 
     def __init__(
         self,
         cookies: Cookies = None,
-        http_client: "httpx.AsyncClient | None" = None,
+        http_client: httpx.AsyncClient | None = None,
         timeout: float = 30,
         user_agent: str = USER_AGENT,
         retries: int = 3,
         backoff: float = 0.5,
         base_url: str = NYT_BASE_URL,
     ):
-        try:
-            import httpx
-        except ImportError:
-            raise ImportError(
-                'AsyncNYTGamesClient needs httpx: pip install "nytimes-games[async]"'
-            ) from None
-        self.cookies = parse_cookies(cookies)
-        self.timeout = timeout
-        self.user_agent = user_agent
-        self.retries = retries
-        self.backoff = backoff
-        self.base_url = base_url.rstrip("/")
+        super().__init__(cookies, user_agent, retries, backoff, base_url)
         self._owns_http = http_client is None
-        self.http_client = http_client or httpx.AsyncClient(follow_redirects=True)
-
-    async def _get(self, path: str, params: dict | None = None, json_response: bool = True):
-        """Return the response from a GET request to NYT (see `_prepare`)."""
-        import httpx
-        url, headers, params, send_cookies = self._prepare(path, params, json_response)
-        if send_cookies and self.cookies:
-            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-        attempt = 0
-        while True:
-            try:
-                response = await self.http_client.get(url, headers=headers, params=params, timeout=self.timeout)
-            except httpx.TransportError:
-                if attempt >= self.retries:
-                    raise
-                response = None
-            else:
-                if response.status_code not in RETRY_STATUSES or attempt >= self.retries:
-                    break
-            wait = self.backoff * 2 ** attempt
-            if response is not None:
-                wait = max(wait, retry_after(response) or 0)
-            await asyncio.sleep(min(wait, 60))
-            attempt += 1
-        logger.info("GET %s", response.request.url)
-        if response.status_code >= 400:
-            raise http_error(f"{response.status_code} Error: {response.reason_phrase} for url: {response.url}",
-                             response)
-        return response.json() if json_response else response
+        self._http = http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=True)
 
     async def aclose(self) -> None:
         """Close the httpx client, unless you passed in your own."""
         if self._owns_http:
-            await self.http_client.aclose()
+            await self._http.aclose()
 
     async def __aenter__(self):
         return self
@@ -693,14 +608,14 @@ def _public_operations():
 def _sync_method(operation):
     @functools.wraps(operation)
     def method(self, *args, **kwargs):
-        return run_sync(self._get, operation(self, *args, **kwargs))
+        return run_sync(self._http, self._settings, operation(self, *args, **kwargs))
     return method
 
 
 def _async_method(operation):
     @functools.wraps(operation)
     async def method(self, *args, **kwargs):
-        return await run_async(self._get, operation(self, *args, **kwargs))
+        return await run_async(self._http, self._settings, operation(self, *args, **kwargs))
     return method
 
 

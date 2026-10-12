@@ -4,6 +4,35 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## 0.11.0 (2026-10-12)
+
+### Changed
+
+- **Breaking:** both clients now use [httpx](https://www.python-httpx.org/),
+  and `requests` and `urllib3` are no longer dependencies. The HTTP layer
+  matches atlantic-games's:
+  - `NYTGamesClient(session=...)` is now `NYTGamesClient(http_client=...)`
+    and takes an `httpx.Client`. As before, your client is used as is and not
+    closed, but the client's retries now apply to it too.
+  - The `NYTGamesClient.session` and `AsyncNYTGamesClient.http_client`
+    attributes are gone; keep a reference to the client you pass in if you
+    need it.
+  - `NYTGamesHTTPError` no longer subclasses `requests.HTTPError`. It has
+    `.status_code`, and `.response` is an `httpx.Response`. Catch
+    `NYTGamesHTTPError` instead of `requests.HTTPError`, and
+    `httpx.HTTPError` instead of `requests.RequestException` for connection
+    errors.
+  - Error messages read `HTTP 404 for <url>`.
+- `NYTGamesClient` has `close()` and works as a context manager, like
+  `AsyncNYTGamesClient`.
+- The `async` extra is no longer needed, since httpx is a core dependency.
+  It's kept, empty, so existing installs still work.
+
+### Fixed
+
+- The REST API closes its NYT client after each request instead of leaving
+  the connection pool to garbage collection.
+
 ## 0.10.0 (2026-10-12)
 
 ### Added

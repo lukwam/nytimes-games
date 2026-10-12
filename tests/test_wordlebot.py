@@ -1,21 +1,25 @@
-"""WordleBot tests, with made-up data."""
+"""WordleBot tests, with NYT mocked.
+
+Analyses are made up; the day's summary is a real NYT response from tests/fixtures.
+"""
 import datetime
 import json
-from unittest import mock
+from unittest import mock as unittest_mock
 
 import pytest
-import requests
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from nytgames import NYTGamesClient
-from nytgames import api
+from nytgames import api as api_module
 from nytgames.cli import app as cli_app
 from nytgames.cli import dates
 from nytgames.cli import output
 from nytgames.cli.state import State
 from nytgames.models import WordleBotSummary
 from nytgames.models import WordlePuzzle
+from tests.support import COOKIES
+from tests.support import NYT
+from tests.support import load
 
 ENTRY = {
     "response_id": "2", "project_version": "1933", "created_at": "2026-10-04T22:46:51.624Z",
@@ -34,42 +38,43 @@ SUMMARY = {
 }
 
 
-@pytest.fixture
-def session():
-    session = mock.Mock(spec=requests.Session)
-    session.get.return_value.raise_for_status.return_value = None
-    return session
+WORDLEBOT_URL = f"{NYT}/svc/int/run/cubby/public-api/v1/responses/wordlebot/reader"
+SUMMARY_URL = "https://static01.nyt.com/newsgraphics/2022/wordlebot/vixen-2025-06-12/summary.json"
+VIXEN_SUMMARY = load("wordlebot/summary_vixen_2025-06-12.json")
+WORDLE = load("wordle/2025-06-12.json")
 
 
-def test_wordlebot_returns_the_latest_analysis(session):
+async def test_wordlebot_returns_the_latest_analysis(logged_in, mock):
     older = {**ENTRY, "response_id": "1", "created_at": "2026-10-04T22:46:35.341Z",
              "content": {**ENTRY["content"], "luck": 0.1}}
-    session.get.return_value.json.return_value = [older, ENTRY]
-    analysis = NYTGamesClient(cookies="NYT-S=abc", session=session).wordlebot()
+    route = mock.get(WORDLEBOT_URL).respond(json=[older, ENTRY])
+    analysis = await logged_in("wordlebot")
     assert analysis.response_id == "2" and analysis.luck == 0.43
     assert analysis.guess_list == ["adieu", "smart", "spank", "shack"]
-    assert session.get.call_args.kwargs["cookies"] == {"NYT-S": "abc"}
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Cookie"] == f"NYT-S={COOKIES['NYT-S']}"
 
 
-def test_wordlebot_none_before_opening_it(session):
-    session.get.return_value.json.return_value = []
-    assert NYTGamesClient(cookies="NYT-S=abc", session=session).wordlebot() is None
+async def test_wordlebot_none_before_opening_it(logged_in, mock):
+    mock.get(WORDLEBOT_URL).respond(json=[])
+    assert await logged_in("wordlebot") is None
 
 
-def test_wordlebot_summary_never_sends_cookies(session):
-    session.get.return_value.json.return_value = SUMMARY
-    summary = NYTGamesClient(cookies="NYT-S=abc", session=session).wordlebot_summary("2026-10-04", solution="shack")
-    assert summary.guesses["normal-simple"][-1] == "shack"
-    url = session.get.call_args.args[0]
-    assert url == "https://static01.nyt.com/newsgraphics/2022/wordlebot/shack-2026-10-04/summary.json"
-    assert session.get.call_args.kwargs["cookies"] is None
+async def test_wordlebot_summary_never_sends_cookies(logged_in, mock):
+    route = mock.get(SUMMARY_URL).respond(json=VIXEN_SUMMARY)
+    summary = await logged_in("wordlebot_summary", "2025-06-12", solution="vixen")
+    assert summary.guesses["normal-simple"] == ["slate", "diner", "given", "vixen"]
+    assert summary.average == {"normal": 4.410192374030687, "hard": 4.219190676325831}
+    assert len(mock.calls) == 1 and route.call_count == 1
+    assert "Cookie" not in route.calls.last.request.headers
 
 
-def test_wordlebot_summary_looks_up_the_solution(session):
-    session.get.return_value.json.side_effect = [
-        {"id": 1, "print_date": "2026-10-04", "solution": "shack"}, SUMMARY]
-    NYTGamesClient(session=session).wordlebot_summary("2026-10-04")
-    assert "shack-2026-10-04" in session.get.call_args.args[0]
+async def test_wordlebot_summary_looks_up_the_solution(api, mock):
+    wordle = mock.get(f"{NYT}/svc/wordle/v2/2025-06-12.json").respond(json=WORDLE)
+    summary = mock.get(SUMMARY_URL).respond(json=VIXEN_SUMMARY)
+    await api("wordlebot_summary", "2025-06-12")
+    assert wordle.call_count == 1 and summary.call_count == 1
+    assert [str(call.request.url) for call in mock.calls] == [f"{NYT}/svc/wordle/v2/2025-06-12.json", SUMMARY_URL]
 
 
 @pytest.fixture
@@ -79,7 +84,7 @@ def cli(tmp_path, monkeypatch):
     monkeypatch.setenv("COLUMNS", "120")
     monkeypatch.setattr(dates, "today", lambda: datetime.date(2026, 10, 4))
     output.default_format = None
-    client = mock.Mock()
+    client = unittest_mock.Mock()
     client.wordle.return_value = WordlePuzzle(id=1, days_since_launch=1933, print_date="2026-10-04", solution="shack")
     client.wordlebot_summary.return_value = WordleBotSummary(**SUMMARY)
     from nytgames.models import WordleBotAnalysis
@@ -107,15 +112,17 @@ def test_cli_other_days_show_everyone_and_paths_with_answers(cli):
     cli.wordlebot.assert_not_called()
 
 
-def test_api_routes():
-    with mock.patch.object(api.NYTGamesClient, "_get", side_effect=[[ENTRY]]):
-        assert TestClient(api.app).get("/wordlebot").json()["efficiency"] == 0.93
-    with mock.patch.object(api.NYTGamesClient, "_get", side_effect=[[]]):
-        assert TestClient(api.app).get("/wordlebot").json() is None
-    with mock.patch.object(api.NYTGamesClient, "_get",
-                           side_effect=[{"id": 1, "print_date": "2026-10-04", "solution": "shack"}, SUMMARY]):
-        assert TestClient(api.app).get("/wordlebot/2026-10-04/summary").json()["average"]["hard"] == 3.93
-
+def test_api_routes(mock):
+    route = mock.get(WORDLEBOT_URL)
+    route.respond(json=[ENTRY])
+    assert TestClient(api_module.app).get("/wordlebot").json()["efficiency"] == 0.93
+    route.respond(json=[])
+    assert TestClient(api_module.app).get("/wordlebot").json() is None
+    assert route.call_count == 2
+    mock.get(f"{NYT}/svc/wordle/v2/2025-06-12.json").respond(json=WORDLE)
+    mock.get(SUMMARY_URL).respond(json=VIXEN_SUMMARY)
+    summary = TestClient(api_module.app).get("/wordlebot/2025-06-12/summary").json()
+    assert summary["average"]["hard"] == 4.219190676325831
 
 
 def test_summary_with_null_percentiles():

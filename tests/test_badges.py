@@ -1,16 +1,19 @@
-"""Badge tests: models, metadata and the trophy case endpoint, with NYT mocked."""
+"""Badge tests: models, metadata and the trophy case endpoint, with NYT mocked.
+
+Badge progress is made up; the shelf items are shaped like real responses.
+"""
 import json
-from unittest import mock
 
 import pytest
-import requests
 
-from nytgames import NYTGamesClient
 from nytgames.badges import all_badges
 from nytgames.badges import badge_info
 from nytgames.models import Badge
 from nytgames.models import WordlePuzzlesList
 from nytgames.views import badge_rows
+from tests.support import COOKIES
+from tests.support import NYT
+from tests.support import USER_ID
 
 # Trophy shelf items from real latests responses, with earned_at shortened.
 WR6 = {"id": "wr6", "badge_type": "streak", "games": ["wordleV2"],
@@ -22,13 +25,6 @@ ST4 = {"id": "st4", "badge_type": "milestone", "games": ["strands"],
        "levels": [25, 50, 75, 100, 250, 500, 750, 1000, 1250, 1500, 2000, 2500, 5000], "progress": 2696,
        "earned_at": list(range(1700000000, 1700000012)), "last_earned_level": 2500, "earned": True}
 SB11 = {"id": "sb11", "badge_type": "holiday", "games": ["spelling_bee"], "levels": [2026], "progress": 0}
-
-
-@pytest.fixture
-def session():
-    session = mock.Mock(spec=requests.Session)
-    session.get.return_value.status_code = 200
-    return session
 
 
 @pytest.mark.parametrize("shelf,ids", [([WR6, CX7], ["wr6", "cx7"]), ({}, []), (None, []), ({"wr6": WR6}, ["wr6"])])
@@ -76,24 +72,30 @@ def test_badge_metadata():
     assert badge_info("sb4").description(5).startswith("Subscribers can earn this badge by ")
 
 
-def test_trophy_case(session):
+async def test_trophy_case(logged_in, mock):
     """The trophy case lists every badge; partly earned badges are in both lists."""
-    session.get.return_value.json.return_value = {
-        "user_id": 1, "trophies": {"wordleV2": {"earned": [WR6], "unearned": [WR6, {"id": "wr2"}]}}}
-    case = NYTGamesClient(session=session).trophy_case("wordleV2")
-    assert session.get.call_args.args[0] == "https://www.nytimes.com/svc/games/badges/trophy-case/wordleV2"
+    route = mock.get(f"{NYT}/svc/games/badges/trophy-case/wordleV2").respond(json={
+        "user_id": USER_ID, "trophies": {"wordleV2": {"earned": [WR6], "unearned": [WR6, {"id": "wr2"}]}}})
+    case = await logged_in("trophy_case", "wordleV2")
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Cookie"] == f"NYT-S={COOKIES['NYT-S']}"
+    assert case.user_id == USER_ID
     assert [b.id for b in case.trophies["wordleV2"].badges] == ["wr6", "wr2"]
     with pytest.raises(ValueError):
-        NYTGamesClient(session=session).trophy_case("wordle")
+        await logged_in("trophy_case", "wordle")
+    assert len(mock.calls) == 1
 
 
-def test_badges_fetches_each_game(session):
-    session.get.return_value.json.side_effect = [
-        {"user_id": 1, "trophies": {"connections": {"earned": [CX7]}}},
-        {"user_id": 1, "trophies": {"spelling_bee": {"unearned": [SB11]}}},
-    ]
-    case = NYTGamesClient(session=session).badges(["connections", "spelling_bee"])
-    assert case.user_id == 1 and list(case.trophies) == ["connections", "spelling_bee"]
+async def test_badges_fetches_each_game(logged_in, mock):
+    connections = mock.get(f"{NYT}/svc/games/badges/trophy-case/connections").respond(
+        json={"user_id": USER_ID, "trophies": {"connections": {"earned": [CX7]}}})
+    spelling_bee = mock.get(f"{NYT}/svc/games/badges/trophy-case/spelling_bee").respond(
+        json={"user_id": USER_ID, "trophies": {"spelling_bee": {"unearned": [SB11]}}})
+    case = await logged_in("badges", ["connections", "spelling_bee"])
+    assert connections.call_count == 1 and spelling_bee.call_count == 1
+    assert [str(call.request.url) for call in mock.calls] == [
+        f"{NYT}/svc/games/badges/trophy-case/connections", f"{NYT}/svc/games/badges/trophy-case/spelling_bee"]
+    assert case.user_id == USER_ID and list(case.trophies) == ["connections", "spelling_bee"]
     rows = badge_rows(case)
     assert [(r["game"], r["name"], r["earned"]) for r in rows] == [
         ("Connections", "Reverse Rainbow", True), ("Spelling Bee", "Valentine Hat", False)]

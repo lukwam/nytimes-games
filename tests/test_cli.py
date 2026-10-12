@@ -8,8 +8,8 @@ import stat
 import sys
 from unittest import mock
 
+import httpx
 import pytest
-import requests
 from typer.testing import CliRunner
 
 from nytgames import NYTGamesAuthenticationError
@@ -319,7 +319,7 @@ def test_cli_extra_message_when_typer_is_missing(monkeypatch):
 
 
 def test_request_errors_are_reported(client, monkeypatch, capsys):
-    client.wordle.side_effect = requests.ConnectionError("offline")
+    client.wordle.side_effect = httpx.ConnectError("offline")
     monkeypatch.setattr(sys, "argv", ["nytg", "wordle"])
     with pytest.raises(SystemExit):
         cli_main.main()
