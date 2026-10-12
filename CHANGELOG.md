@@ -4,6 +4,15 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## 0.9.7
+
+### Fixed
+
+- `wordlebot_summary()` failed to validate summaries from 2021 to early
+  2022, where NYT sends null percentiles for a mode (`hard-ps`,
+  `normal-ps`) that had none yet. Percentiles for a mode can now be null.
+  Found by gamesapp.
+
 ## 0.9.6
 
 ### Added
