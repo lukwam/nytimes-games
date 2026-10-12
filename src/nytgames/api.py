@@ -16,6 +16,7 @@ dependency::
     app.dependency_overrides[get_client] = lambda: NYTGamesClient(cookies=...)
 """
 import enum
+from collections.abc import Iterator
 from typing import Any
 from typing import Optional
 
@@ -34,9 +35,9 @@ except ImportError as err:  # pragma: no cover
         'nytgames.api requires FastAPI. Install it with: pip install "nytimes-games[api]"'
     ) from err
 
-import requests
 
 from nytgames import NYTGamesClient
+from nytgames import NYTGamesHTTPError
 from nytgames import NYTGamesNoProfileError
 from nytgames import NYTGamesParseError
 from nytgames import __version__
@@ -91,14 +92,16 @@ OPENAPI_TAGS = [
 router = APIRouter()
 
 
-def get_client(request: Request) -> NYTGamesClient:
-    """Return an NYT Games client using the cookies sent with the request."""
-    return NYTGamesClient(cookies=request.cookies)
+def get_client(request: Request) -> Iterator[NYTGamesClient]:
+    """Yield an NYT Games client using the cookies sent with the request,
+    and close it after the response."""
+    with NYTGamesClient(cookies=request.cookies) as client:
+        yield client
 
 
-async def nyt_http_error_handler(request: Request, exc: requests.HTTPError) -> JSONResponse:
+async def nyt_http_error_handler(request: Request, exc: NYTGamesHTTPError) -> JSONResponse:
     """Return NYT HTTP errors with NYT's status code."""
-    status_code = exc.response.status_code if exc.response is not None else 502
+    status_code = exc.status_code or 502
     return JSONResponse(
         status_code=status_code,
         content={"detail": f"NYT API returned {status_code}"},
@@ -117,7 +120,7 @@ async def nyt_no_profile_handler(request: Request, exc: NYTGamesNoProfileError) 
 
 def add_exception_handlers(app: FastAPI) -> None:
     """Return NYT errors from the client as HTTP responses instead of 500s."""
-    app.add_exception_handler(requests.HTTPError, nyt_http_error_handler)
+    app.add_exception_handler(NYTGamesHTTPError, nyt_http_error_handler)
     app.add_exception_handler(NYTGamesNoProfileError, nyt_no_profile_handler)
     app.add_exception_handler(NYTGamesParseError, nyt_parse_error_handler)
 

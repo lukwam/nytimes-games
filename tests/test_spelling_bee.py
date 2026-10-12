@@ -1,20 +1,28 @@
 """Spelling Bee puzzles and hints tests.
 
-The hints cases are ported from nyt-puzzles so both stay in agreement.
+The hints cases are ported from nyt-puzzles so both stay in agreement. The
+game page and the dated puzzle are real NYT responses from tests/fixtures.
 """
 import json
-from unittest import mock
 
 import pytest
-import requests
 from fastapi.testclient import TestClient
 
-from nytgames import NYTGamesClient
 from nytgames import NYTGamesNotFoundError
+from nytgames import NYTGamesParseError
 from nytgames import api as main
 from nytgames import spelling_bee_hints
 from nytgames.models import SpellingBeeGameDay
 from nytgames.models import SpellingBeePuzzle
+from tests.support import NYT
+from tests.support import USER_ID
+from tests.support import load
+from tests.support import text
+
+PAGE_URL = f"{NYT}/puzzles/spelling-bee"
+PAGE = text("spelling_bee/page.html")
+PUZZLE_URL = f"{NYT}/svc/spelling-bee/v1/2025-06-12.json"
+PUZZLE = load("spelling_bee/2025-06-12.json")
 
 
 def make_puzzle(print_date, answers, letters="iabchln", pangrams=None):
@@ -32,40 +40,6 @@ def make_puzzle(print_date, answers, letters="iabchln", pangrams=None):
         "printDate": print_date,
         "validLetters": list(letters),
     }
-
-
-def make_page(puzzles):
-    """Build Spelling Bee page HTML embedding the given puzzles, newest first."""
-    game_data = {
-        "today": puzzles[0],
-        "yesterday": puzzles[1],
-        "pastPuzzles": {
-            "today": puzzles[0],
-            "yesterday": puzzles[1],
-            "thisWeek": puzzles[2:3],
-            "lastWeek": puzzles[3:],
-        },
-    }
-    return f"<html><script>window.gameData = {json.dumps(game_data)}</script></html>".encode()
-
-
-PUZZLES = [
-    make_puzzle("2026-10-03", ["bacchanalia", "chin", "hail"], pangrams=["bacchanalia"]),
-    make_puzzle("2026-10-02", ["tilt"], letters="tilxyzw"),
-    make_puzzle("2026-10-01", ["tilt"], letters="tilxyzw"),
-    make_puzzle("2026-09-21", ["tilt"], letters="tilxyzw"),
-]
-
-
-@pytest.fixture
-def page():
-    """Patch the HTTP session to return a Spelling Bee page."""
-    with mock.patch("requests.Session.get") as patched:
-        response = patched.return_value
-        response.status_code = 200
-        response.content = make_page(PUZZLES)
-        response.raise_for_status.return_value = None
-        yield patched
 
 
 def test_hints_counts_words_by_first_letter_and_length():
@@ -120,18 +94,24 @@ def test_hints_accept_a_model():
     assert spelling_bee_hints(SpellingBeeGameDay(**puzzle)) == spelling_bee_hints(puzzle)
 
 
-def test_spelling_bee_puzzles_reads_every_puzzle_on_the_page(page):
-    puzzles = NYTGamesClient().spelling_bee_puzzles()
+async def test_spelling_bee_puzzles_reads_every_puzzle_on_the_page(api, mock):
+    route = mock.get(PAGE_URL).respond(text=PAGE)
+    puzzles = await api("spelling_bee_puzzles")
 
-    assert list(puzzles) == ["2026-09-21", "2026-10-01", "2026-10-02", "2026-10-03"]
-    assert puzzles["2026-10-03"].answers == PUZZLES[0]["answers"]
+    assert route.call_count == 1
+    assert list(puzzles) == [f"2026-10-{day:02}" for day in range(5, 13)]
+    game_data = json.loads(PAGE.split("window.gameData = ", 1)[1].split("</script>", 1)[0])
+    assert puzzles["2026-10-12"].answers == game_data["today"]["answers"]
+    assert puzzles["2026-10-12"].pangrams == ["empathy"] and puzzles["2026-10-12"].centerLetter == "e"
+    assert puzzles["2026-10-05"].answers == game_data["pastPuzzles"]["lastWeek"][0]["answers"]
 
 
-def test_spelling_bee_fails_without_game_data(page):
-    page.return_value.content = b"<html></html>"
+async def test_spelling_bee_fails_without_game_data(api, mock):
+    mock.get(PAGE_URL).respond(text="<html></html>")
 
-    with pytest.raises(ValueError, match="game data not found"):
-        NYTGamesClient().spelling_bee_puzzles()
+    with pytest.raises(ValueError, match="game data not found") as error:
+        await api("spelling_bee_puzzles")
+    assert isinstance(error.value, NYTGamesParseError)
 
 
 V1_PUZZLE = {
@@ -143,17 +123,6 @@ V1_PUZZLE = {
     "pangrams": ["bacchanalia"],
     "print_date": "2026-10-03",
 }
-
-
-@pytest.fixture
-def v1():
-    """Patch the HTTP session to return a v1 Spelling Bee puzzle."""
-    with mock.patch("requests.Session.get") as patched:
-        response = patched.return_value
-        response.status_code = 200
-        response.json.return_value = V1_PUZZLE
-        response.raise_for_status.return_value = None
-        yield patched
 
 
 def test_v1_puzzle_converts_to_the_game_page_format():
@@ -180,45 +149,53 @@ def test_v1_puzzle_matches_page_puzzle_hints():
     assert spelling_bee_hints(v1_day) == spelling_bee_hints(page_day)
 
 
-def test_spelling_bee_puzzle_by_date(v1):
-    day = NYTGamesClient().spelling_bee_puzzle("2026-10-03")
+async def test_spelling_bee_puzzle_by_date(api, mock):
+    route = mock.get(PUZZLE_URL).respond(json=PUZZLE)
+    day = await api("spelling_bee_puzzle", "2025-06-12")
 
-    assert day.answers == ["bacchanalia", "chin", "hail"]
-    assert v1.call_args.args[0] == "https://www.nytimes.com/svc/spelling-bee/v1/2026-10-03.json"
+    assert route.call_count == 1
+    assert day.answers[:5] == ["clodding", "coddling", "colliding", "condoling", "clod"]
+    assert day.answers == PUZZLE["pangrams"] + PUZZLE["answers"]
+    assert day.centerLetter == "d" and day.printDate == "2025-06-12"
+    assert day.displayDate == "June 12, 2025" and day.displayWeekday == "Thursday"
 
 
-def test_spelling_bee_puzzle_missing_date_raises_not_found(v1):
-    response = v1.return_value
-    response.status_code = 404
-    response.raise_for_status.side_effect = requests.HTTPError("404", response=response)
+async def test_spelling_bee_puzzle_missing_date_raises_not_found(api, mock):
+    route = mock.get(f"{NYT}/svc/spelling-bee/v1/2018-05-01.json").respond(404)
 
     with pytest.raises(NYTGamesNotFoundError):
-        NYTGamesClient().spelling_bee_puzzle("2018-05-01")
+        await api("spelling_bee_puzzle", "2018-05-01")
+    assert route.call_count == 1
 
 
-def test_api_date_route(v1):
-    response = TestClient(main.app).get("/spelling-bee/2026-10-03")
+def test_api_date_route(mock):
+    mock.get(PUZZLE_URL).respond(json=PUZZLE)
+    response = TestClient(main.app).get("/spelling-bee/2025-06-12")
 
     assert response.status_code == 200
-    assert response.json()["answers"] == ["bacchanalia", "chin", "hail"]
+    assert response.json()["answers"] == PUZZLE["pangrams"] + PUZZLE["answers"]
 
 
-def test_api_date_route_returns_404_for_missing_dates(v1):
-    response = v1.return_value
-    response.status_code = 404
-    response.raise_for_status.side_effect = requests.HTTPError("404", response=response)
+def test_api_date_route_returns_404_for_missing_dates(mock):
+    mock.get(f"{NYT}/svc/spelling-bee/v1/2018-05-01.json").respond(404)
 
     assert TestClient(main.app).get("/spelling-bee/2018-05-01").status_code == 404
 
 
-def test_api_hints_route(v1):
-    response = TestClient(main.app).get("/spelling-bee/2026-10-03/hints")
+def test_api_hints_route(mock):
+    mock.get(PUZZLE_URL).respond(json=PUZZLE)
+    response = TestClient(main.app).get("/spelling-bee/2025-06-12/hints")
 
     assert response.status_code == 200
-    assert response.json() == spelling_bee_hints(SpellingBeePuzzle(**V1_PUZZLE).to_game_day())
+    assert response.json() == spelling_bee_hints(SpellingBeePuzzle(**PUZZLE).to_game_day())
+    assert response.json()["pangrams"] == 4
 
 
-def test_api_latest_route_is_not_treated_as_a_date(page):
-    TestClient(main.app, raise_server_exceptions=False).get("/spelling-bee/latest")
+def test_api_latest_route_is_not_treated_as_a_date(mock):
+    route = mock.get(f"{NYT}/svc/games/state/spelling_bee/latests").respond(
+        json={"user_id": USER_ID, "states": []})
 
-    assert page.call_args.args[0].endswith("/svc/games/state/spelling_bee/latests")
+    response = TestClient(main.app).get("/spelling-bee/latest")
+
+    assert route.call_count == 1 and len(mock.calls) == 1
+    assert response.status_code == 200 and response.json()["user_id"] == USER_ID

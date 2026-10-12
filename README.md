@@ -211,8 +211,8 @@ cookie values.
 
 ## Errors
 
-HTTP errors from NYT are raised as `NYTGamesHTTPError`, a subclass of
-`requests.HTTPError`:
+HTTP errors from NYT are raised as `NYTGamesHTTPError`, with the HTTP status
+as `.status_code` and the `httpx.Response` as `.response`:
 
 | Exception | When |
 |---|---|
@@ -238,16 +238,9 @@ retried up to 3 times with exponential backoff, honoring NYT's `Retry-After`
 header. Adjust with `NYTGamesClient(retries=5, backoff=1.0, timeout=60)`, or
 turn retries off with `retries=0`.
 
-You can pass your own `requests` session, used as is (without the client's
-retries). For example, to cache responses with
-[requests-cache](https://requests-cache.readthedocs.io/):
-
-```python
-import requests_cache
-
-session = requests_cache.CachedSession("nyt_cache", expire_after=3600)
-client = NYTGamesClient(session=session)
-```
+You can pass your own `httpx.Client` (or `httpx.AsyncClient` for the async
+client) as `http_client`, for example to add caching or a proxy. The client
+doesn't close it, and still retries as above.
 
 Cookies are sent only to NYT (or the `base_url` you set) and are never logged.
 
@@ -268,12 +261,8 @@ constructor, and [your own REST API](examples/api) in Docker.
 
 ## Async apps
 
-`AsyncNYTGamesClient` has every method of `NYTGamesClient`, awaited. It needs
-the `async` extra, which adds [httpx](https://www.python-httpx.org/):
-
-```bash
-pip install "nytimes-games[async]"
-```
+`AsyncNYTGamesClient` has every method of `NYTGamesClient`, awaited. Both use
+[httpx](https://www.python-httpx.org/), so there's no extra to install:
 
 ```python
 import asyncio
@@ -291,11 +280,9 @@ async def main():
 asyncio.run(main())
 ```
 
-Errors, retries and cookie handling are the same as the sync client's: errors
-are the same `NYTGamesHTTPError` subclasses (with an `httpx.Response` as
-`.response`), and failed connections, rate limits and server errors are
-retried with backoff. Pass your own `httpx.AsyncClient` as `http_client` to
-control transport details; it isn't closed when the client is. Both clients
+Errors, retries and cookie handling are the same as the sync client's. Pass
+your own `httpx.AsyncClient` as `http_client` to control transport details;
+it isn't closed when the client is. Both clients
 run the same code for every endpoint, so they always have the same methods.
 
 **FastAPI:** use `AsyncNYTGamesClient` in `async def` routes, or the sync

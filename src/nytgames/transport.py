@@ -1,70 +1,137 @@
-"""Requests for the sync and async clients.
+"""HTTP for the sync and async clients.
 
 Client operations are written once, as generators that yield `Request`s and
-receive the decoded responses. `run_sync` drives one with a sync `get`
-function and `run_async` with an async one, so both clients share every URL,
-parser and error rule. Errors from a request are thrown into the operation,
-so it can catch them (for example to stop at a 404).
+receive the decoded responses. `run_sync` drives one with an `httpx.Client`,
+`run_async` with an `httpx.AsyncClient`, so both clients share every URL,
+parser and error rule.
 """
-from collections.abc import Awaitable
-from collections.abc import Callable
-from collections.abc import Generator
+import asyncio
+import datetime
+import email.utils
+import logging
+import time
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
+from typing import Generator
+
+import httpx
 
 from nytgames.exceptions import NYTGamesAuthenticationError
-from nytgames.exceptions import NYTGamesError
 from nytgames.exceptions import NYTGamesHTTPError
 from nytgames.exceptions import NYTGamesNotFoundError
+from nytgames.exceptions import NYTGamesParseError
 from nytgames.exceptions import NYTGamesRateLimitError
 
+logger = logging.getLogger("nytgames")
+
+NYT_BASE_URL = "https://www.nytimes.com"
 RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 
 @dataclass
 class Request:
-    """One GET request to NYT, with the same arguments as the clients' `_get`.
+    """One GET request.
 
-    `path` is relative to the client's `base_url`, or a full URL.
-    `json_response` returns the decoded JSON; otherwise the response itself
-    (its `.content` is the body).
+    `url` is relative to the client's `base_url`, or a full URL. `kind` is
+    how to decode the body: "json" or "text". `not_found` is the message for
+    a 404.
     """
-    path: str
-    params: dict | None = None
-    json_response: bool = True
+    url: str
+    params: dict[str, Any] = field(default_factory=dict)
+    kind: str = "json"
+    headers: dict[str, str] = field(default_factory=dict)
+    not_found: str | None = None
 
 
 Operation = Generator[Request, Any, Any]
 
 
-def retry_after(response) -> float | None:
-    """Return the seconds from a Retry-After header, if it has a number."""
+@dataclass
+class Settings:
+    """What both clients need to send requests."""
+    cookies: dict[str, str]
+    user_agent: str
+    retries: int = 3
+    backoff: float = 0.5
+    base_url: str = NYT_BASE_URL
+
+
+def retry_after(response: httpx.Response) -> float | None:
+    """Return the seconds a Retry-After header asks to wait, if it has a
+    number of seconds or a date."""
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
     try:
-        return float(response.headers.get("Retry-After"))
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+        return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
     except (TypeError, ValueError):
         return None
 
 
-def http_error(message: str, response) -> NYTGamesHTTPError:
-    """Return the NYTGamesHTTPError subclass for a response's status code."""
-    if response.status_code == 429:
-        return NYTGamesRateLimitError(message, response=response, retry_after=retry_after(response))
-    error_class = {
-        401: NYTGamesAuthenticationError,
-        403: NYTGamesAuthenticationError,
-        404: NYTGamesNotFoundError,
-    }.get(response.status_code, NYTGamesHTTPError)
-    return error_class(message, response=response)
+def _delay(settings: Settings, attempt: int, response: httpx.Response | None) -> float:
+    wait = settings.backoff * (2 ** attempt)
+    after = retry_after(response) if response is not None else None
+    return min(max(wait, after or 0), 60)
 
 
-def run_sync(get: Callable[..., Any], operation: Operation):
-    """Run an operation, sending each request with `get`, and return its result."""
+def _should_retry(settings: Settings, attempt: int, response: httpx.Response | None) -> bool:
+    if attempt >= settings.retries:
+        return False
+    return response is None or response.status_code in RETRY_STATUSES
+
+
+def _build(settings: Settings, request: Request) -> dict:
+    url = request.url if request.url.startswith("https://") else settings.base_url + request.url
+    headers = {"User-Agent": settings.user_agent, **request.headers}
+    if request.kind != "text":
+        headers["Accept"] = "application/json"
+    if settings.cookies and url.startswith((settings.base_url + "/", NYT_BASE_URL + "/")):
+        # Only NYT's own site gets the cookies, never static01.nyt.com or other hosts.
+        headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in settings.cookies.items())
+    params = {k: v for k, v in request.params.items() if v is not None}
+    return {"url": url, "params": params, "headers": headers}
+
+
+def _decode(request: Request, response: httpx.Response):
+    """Return the decoded body, or raise the matching error."""
+    logger.info("GET %s -> %s", response.request.url, response.status_code)
+    status = response.status_code
+    if status >= 400:
+        message = f"HTTP {status} for {response.request.url}"
+        if status == 429:
+            raise NYTGamesRateLimitError(message, status_code=status, response=response,
+                                         retry_after=retry_after(response))
+        if status == 404:
+            raise NYTGamesNotFoundError(request.not_found or message, status_code=status, response=response)
+        if status in (401, 403):
+            raise NYTGamesAuthenticationError(message, status_code=status, response=response)
+        raise NYTGamesHTTPError(message, status_code=status, response=response)
+    if request.kind == "text":
+        return response.text
+    try:
+        return response.json()
+    except ValueError:
+        raise NYTGamesParseError(f"Expected JSON from {response.request.url}, got something else") from None
+
+
+def run_sync(client: httpx.Client, settings: Settings, operation: Operation):
+    """Run an operation with a sync httpx client and return its result.
+
+    Errors from a request are thrown into the operation, so it can catch
+    them (e.g. to stop at a 404).
+    """
     try:
         request = next(operation)
         while True:
             try:
-                response = get(request.path, request.params, request.json_response)
-            except NYTGamesError as error:
+                response = _send_sync(client, settings, request)
+            except NYTGamesHTTPError as error:
                 request = operation.throw(error)
             else:
                 request = operation.send(response)
@@ -72,16 +139,48 @@ def run_sync(get: Callable[..., Any], operation: Operation):
         return stop.value
 
 
-async def run_async(get: Callable[..., Awaitable[Any]], operation: Operation):
-    """Run an operation, sending each request with an async `get`, and return its result."""
+def _send_sync(client: httpx.Client, settings: Settings, request: Request):
+    attempt = 0
+    while True:
+        response = None
+        try:
+            response = client.get(**_build(settings, request))
+        except httpx.TransportError:
+            if not _should_retry(settings, attempt, None):
+                raise
+        else:
+            if not _should_retry(settings, attempt, response):
+                return _decode(request, response)
+        time.sleep(_delay(settings, attempt, response))
+        attempt += 1
+
+
+async def run_async(client: httpx.AsyncClient, settings: Settings, operation: Operation):
+    """Run an operation with an async httpx client and return its result."""
     try:
         request = next(operation)
         while True:
             try:
-                response = await get(request.path, request.params, request.json_response)
-            except NYTGamesError as error:
+                response = await _send_async(client, settings, request)
+            except NYTGamesHTTPError as error:
                 request = operation.throw(error)
             else:
                 request = operation.send(response)
     except StopIteration as stop:
         return stop.value
+
+
+async def _send_async(client: httpx.AsyncClient, settings: Settings, request: Request):
+    attempt = 0
+    while True:
+        response = None
+        try:
+            response = await client.get(**_build(settings, request))
+        except httpx.TransportError:
+            if not _should_retry(settings, attempt, None):
+                raise
+        else:
+            if not _should_retry(settings, attempt, response):
+                return _decode(request, response)
+        await asyncio.sleep(_delay(settings, attempt, response))
+        attempt += 1

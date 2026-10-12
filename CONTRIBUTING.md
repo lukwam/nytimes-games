@@ -25,6 +25,8 @@ pytest
 ```
 
 The tests mock NYT, so they run offline and don't need cookies.
+Each client test runs against both `NYTGamesClient` and
+`AsyncNYTGamesClient`.
 
 Lint with ruff, which CI also runs, or install the pre-commit hooks to run it
 on every commit:
@@ -45,7 +47,7 @@ uvicorn nytgames.api:app --reload
 ```
 src/nytgames/
     client.py        NYTGamesClient and AsyncNYTGamesClient: one operation per NYT endpoint
-    transport.py     Runs operations for the sync (requests) and async (httpx) clients
+    transport.py     Requests, retries and error mapping for both clients
     models.py        Pydantic models for NYT's responses
     exceptions.py    Error types
     spelling_bee.py  Spelling Bee hints
@@ -65,6 +67,7 @@ src/nytgames/
         output.py    --format handling, shared by every command
         extension.py Public API for tools built on nytg; keep it backwards compatible
 tests/
+    fixtures/        Real NYT responses; saved games and stats are made up, in the tests
 examples/            Small scripts built on the package, and an example API with a Dockerfile
 docs/                endpoints.md: the endpoints, limits and quirks behind each game; and the
                      README screenshot, regenerated with docs/make_screenshot.py
@@ -74,13 +77,23 @@ docs/                endpoints.md: the endpoints, limits and quirks behind each 
 
 Each client method is a generator in `_Operations` that yields
 `transport.Request`s and receives the decoded responses. `run_sync` drives
-it with a `requests` session and `run_async` with an `httpx.AsyncClient`, so
+it with an `httpx.Client` and `run_async` with an `httpx.AsyncClient`, so
 a new endpoint only has to be written once. Errors from a request are thrown
 into the generator, so an operation can catch a 404 and stop.
 
 Cookies are only sent to `www.nytimes.com` (or the client's `base_url`),
 never to other hosts such as `static01.nyt.com`. Every request is a GET;
 the tests fail if a client sends anything else.
+
+## Fixtures
+
+Fixtures are real responses, saved as NYT sent them; pre-commit leaves them
+alone. Before adding one:
+
+- remove cookies, login tokens, user IDs and anything else personal; keep
+  saved games and stats made up, in the tests (see `tests/support.py`)
+- keep it small: trim a page to the part that matters, as
+  `spelling_bee/page.html` is
 
 ## Checking against NYT
 
@@ -107,8 +120,8 @@ Set `NYT_COOKIES` to also check the endpoints that need cookies.
    `cli/` if it's useful on the command line. Commands build JSON-compatible
    data and pass it to `output.emit()` with a table renderer, so every output
    format works. Hide answers unless `--answers` is given.
-3. Add tests that mock the NYT response, and check the method against NYT
-   before opening a pull request.
+3. Add tests that mock the NYT response with `respx`, using a fixture, and
+   check the method against NYT before opening a pull request.
 4. Update the tables in `README.md`, note anything new about the endpoint in
    `docs/endpoints.md`, and add a line to `CHANGELOG.md`.
 

@@ -10,11 +10,12 @@ from typing import Annotated
 from typing import Any
 from typing import Optional
 
-import requests
+import httpx
 import typer
 from rich.markup import escape
 
 from nytgames import NYTGamesAuthenticationError
+from nytgames import NYTGamesHTTPError
 from nytgames import NYTGamesNoProfileError
 from nytgames import NYTGamesNotFoundError
 from nytgames import NYTGamesParseError
@@ -153,7 +154,7 @@ def run(app: typer.Typer) -> None:
     except NYTGamesParseError as err:
         output.err_console.print(f"[red]Couldn't read NYT's response:[/red] {escape(redact(str(err)))}")
         sys.exit(1)
-    except requests.RequestException as err:
+    except (NYTGamesHTTPError, httpx.HTTPError) as err:
         output.err_console.print(f"[red]Request to NYT failed:[/red] {escape(redact(str(err)))}")
         sys.exit(1)
     except KeyboardInterrupt:
