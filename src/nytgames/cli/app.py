@@ -28,13 +28,14 @@ from nytgames.cli import player
 from nytgames.cli import puzzles
 from nytgames.cli import settings
 from nytgames.cli.config import Config
+from nytgames.cli.state import COOKIES_ENV
 from nytgames.cli.state import state
 
 DEFAULT_NAME = "nytg"
 DEFAULT_HELP = """Puzzles, stats and archives from the New York Times Games.
 
 Puzzles work without logging in. For your stats and progress, run
-[bold]{name} auth login[/bold] with your NYT-S cookie, or set NYT_COOKIES.
+[bold]{name} auth login[/bold] with your NYT-S cookie, or set {env}.
 """
 
 
@@ -63,7 +64,7 @@ def create_app(
     }
     settings_kwargs.update(typer_kwargs)
     app = typer.Typer(**settings_kwargs)
-    help_text = help or DEFAULT_HELP.format(name=name)
+    help_text = help or DEFAULT_HELP.format(name=name, env=COOKIES_ENV)
     version_text = f"{name} {version or __version__}"
 
     def version_callback(value: bool) -> None:
@@ -79,7 +80,7 @@ def create_app(
         ] = None,
         cookies: Annotated[
             Optional[str],
-            typer.Option("--cookies", help="NYT cookies for this command, e.g. NYT-S=... (or set NYT_COOKIES).",
+            typer.Option("--cookies", help=f"NYT cookies for this command, e.g. NYT-S=... (or set {COOKIES_ENV}).",
                          show_default=False),
         ] = None,
         fmt: output.FormatOption = None,
@@ -135,7 +136,7 @@ def run(app: typer.Typer) -> None:
     except NYTGamesAuthenticationError:
         output.err_console.print(
             "[red]NYT rejected the request.[/red] This needs your NYT cookies, which are missing "
-            f"or have expired. Run [bold]{name} auth login[/bold] or set NYT_COOKIES."
+            f"or have expired. Run [bold]{name} auth login[/bold] or set {COOKIES_ENV}."
         )
         sys.exit(1)
     except NYTGamesRateLimitError as err:
@@ -150,7 +151,7 @@ def run(app: typer.Typer) -> None:
         output.err_console.print("[red]Not found.[/red] NYT has no puzzle for that date.")
         sys.exit(1)
     except NYTGamesParseError as err:
-        output.err_console.print(f"[red]Couldn't read NYT's response:[/red] {escape(str(err))}")
+        output.err_console.print(f"[red]Couldn't read NYT's response:[/red] {escape(redact(str(err)))}")
         sys.exit(1)
     except requests.RequestException as err:
         output.err_console.print(f"[red]Request to NYT failed:[/red] {escape(redact(str(err)))}")

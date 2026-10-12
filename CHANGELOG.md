@@ -4,7 +4,30 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
-## 0.9.7
+## 0.10.0 (2026-10-12)
+
+### Added
+
+- `pytest -m live` runs live tests against NYT (deselected by default), and
+  the nightly live check runs them too.
+- `docs/endpoints.md` documents NYT's endpoints, limits and quirks.
+- The README's "Read-only" and "How it works" sections. The tests now check
+  that the clients only send GET requests.
+
+### Changed
+
+- Linted with ruff, in CI and as a pre-commit hook.
+
+### Fixed
+
+- The REST API's `/docs` page lists the Badges and Bonus Puzzles routes under
+  described tags.
+- `nytg --format yaml` without PyYAML says how to install it instead of
+  showing an import error.
+- `nytg` hides your cookie values in "Couldn't read NYT's response" errors,
+  as it does in its other errors.
+
+## 0.9.7 (2026-10-12)
 
 ### Fixed
 
@@ -13,7 +36,7 @@ versions may include breaking changes.
   `normal-ps`) that had none yet. Percentiles for a mode can now be null.
   Found by gamesapp.
 
-## 0.9.6
+## 0.9.6 (2026-10-11)
 
 ### Added
 
@@ -32,7 +55,7 @@ versions may include breaking changes.
   directly, so overriding or patching a method on a client instance no
   longer changes those calls; patch `_get` to fake NYT's responses instead.
 
-## 0.9.5
+## 0.9.5 (2026-10-08)
 
 ### Fixed
 
@@ -46,7 +69,7 @@ versions may include breaking changes.
 - `bonus_week()` raises `NYTGamesParseError` instead of `KeyError` for an
   unexpected response.
 
-## 0.9.4
+## 0.9.4 (2026-10-08)
 
 ### Added
 
@@ -73,7 +96,7 @@ versions may include breaking changes.
 - `ConnectionsPuzzle.board()` and `nytg connections` assumed a 4x4 board;
   they now fit the puzzle (3x3 for Connections 3x3).
 
-## 0.9.3
+## 0.9.3 (2026-10-06)
 
 ### Added
 
@@ -96,7 +119,7 @@ versions may include breaking changes.
 - `nytg badges [game] [--earned]`, the `badges` MCP tool, and `GET /badges`
   and `GET /badges/{game}` in the API.
 
-## 0.9.2
+## 0.9.2 (2026-10-05)
 
 ### Added
 
@@ -110,7 +133,7 @@ versions may include breaking changes.
   `nytg history strands` (solved, other words found).
 - `GET /connections/latest` and `GET /strands/latest` in the API.
 
-## 0.9.1
+## 0.9.1 (2026-10-04)
 
 ### Fixed
 
@@ -121,7 +144,7 @@ versions may include breaking changes.
   `YYYY-MM-DD` names, so existing archives resume as before. Future dates
   are still fetched by date.
 
-## 0.9.0
+## 0.9.0 (2026-10-04)
 
 ### Added
 
@@ -136,7 +159,7 @@ versions may include breaking changes.
   answers hidden, today, histories, WordleBot comparisons), shared by nytg and
   the MCP server.
 
-## 0.8.4
+## 0.8.4 (2026-10-04)
 
 ### Fixed
 
@@ -150,7 +173,7 @@ versions may include breaking changes.
   nyt-puzzles.
 - `nytg today` and `nytg history` show these games as "played".
 
-## 0.8.3
+## 0.8.3 (2026-10-04)
 
 ### Security
 
@@ -169,7 +192,7 @@ versions may include breaking changes.
 - `nytg` never prints raw tracebacks: unexpected errors print a one-line
   message with any cookie values redacted.
 
-## 0.8.2
+## 0.8.2 (2026-10-04)
 
 ### Added
 
@@ -182,7 +205,7 @@ versions may include breaking changes.
   paths. API routes `/wordlebot` and `/wordlebot/{date}/summary`.
 - Cookies are only sent to NYT's main site, never to its static file server.
 
-## 0.8.1
+## 0.8.1 (2026-10-04)
 
 ### Fixed
 
@@ -198,7 +221,7 @@ versions may include breaking changes.
   puzzle on a date that has two. API route `/crosswords/id/{puzzle_id}` and
   `nytg crossword --id`.
 
-## 0.8.0
+## 0.8.0 (2026-10-04)
 
 ### Added
 
@@ -236,7 +259,7 @@ versions may include breaking changes.
   results (for empty ranges and ranges that are too long); it now returns an
   empty list. Its docs recommend ranges of 90 days or less.
 
-## 0.7.0
+## 0.7.0 (2026-10-04)
 
 ### Added
 
@@ -251,7 +274,7 @@ versions may include breaking changes.
   `nytg archive crossword-* --as puz|ipuz|xml`.
 - API route `/crosswords/{publish_type}/{date}/download?format=puz`.
 
-## 0.6.1
+## 0.6.1 (2026-10-04)
 
 ### Fixed
 
@@ -263,7 +286,7 @@ versions may include breaking changes.
 - `nytg crossword --answers` no longer repeats letters in clues that turn a
   corner.
 
-## 0.6.0
+## 0.6.0 (2026-10-04)
 
 ### Added
 
@@ -280,7 +303,7 @@ versions may include breaking changes.
 
 - Error messages name the running command, for example `mytool auth login`.
 
-## 0.5.0
+## 0.5.0 (2026-10-04)
 
 ### Added
 
@@ -306,7 +329,7 @@ versions may include breaking changes.
   puzzles, which is what NYT's list returns for Midi; use `archive()` for
   Midi puzzles. The API returns 400.
 
-## 0.4.0
+## 0.4.0 (2026-10-04)
 
 ### Added
 
@@ -330,7 +353,7 @@ versions may include breaking changes.
 
 - The standalone `api/` service and its deployment files.
 
-## 0.3.2
+## 0.3.2 (2026-10-04)
 
 ### Fixed
 
@@ -338,21 +361,21 @@ versions may include breaking changes.
   `image_alt_text` instead of `content`. Added `card.text` and
   `ConnectionsPuzzle.illustrator`.
 
-## 0.3.1
+## 0.3.1 (2026-10-04)
 
 - First release on PyPI, as `nytimes-games`. Ships `py.typed`.
 
-## 0.3.0
+## 0.3.0 (2026-10-04)
 
 ### Added
 
 - `spelling_bee_puzzle(date)`: any Spelling Bee from 2018-05-06.
 
-## 0.2.1
+## 0.2.1 (2026-10-04)
 
 - Corrected the documented Letter Boxed date range.
 
-## 0.2.0
+## 0.2.0 (2026-10-04)
 
 ### Added
 
@@ -362,7 +385,7 @@ versions may include breaking changes.
   `NYTGamesNotFoundError`, `NYTGamesParseError`.
 - A `nytimes-games` User-Agent.
 
-## 0.1.0
+## 0.1.0 (2026-10-04)
 
 - First release as an installable library, with endpoints updated for NYT's
   current APIs.

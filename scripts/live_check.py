@@ -174,7 +174,8 @@ def user_checks(client: NYTGamesClient) -> list[tuple[str, Callable[[], str]]]:
             return f"{len(latest(ids).states)} of {len(ids)} recent games played"
         return check
 
-    return [("Player stats", stats), ("WordleBot", wordlebot), ("Badges", badges), ("Bonus Puzzles states", bonus_states),
+    return [("Player stats", stats), ("WordleBot", wordlebot), ("Badges", badges),
+            ("Bonus Puzzles states", bonus_states),
             ("Connections states", game_states("connections", client.connections_latest)),
             ("Strands states", game_states("strands", client.strands_latest))]
 

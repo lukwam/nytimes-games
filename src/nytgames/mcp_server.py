@@ -27,10 +27,10 @@ from nytgames import NYTGamesRateLimitError
 from nytgames import __version__
 from nytgames import formats
 from nytgames import views
-from nytgames.client import BADGE_GAMES
+from nytgames.cli import dates
 from nytgames.cli.config import Config
 from nytgames.cli.dates import parse_date
-from nytgames.cli import dates
+from nytgames.client import BADGE_GAMES
 
 try:
     from mcp.server.mcpserver import MCPServer

@@ -136,8 +136,10 @@ def test_badges(nyt):
 
 
 def test_bonus_puzzle_hides_answers(nyt):
-    from tests.test_bonus import WEEK, WORDLE_IN_ONE
-    from nytgames.models import BonusWeek, WordleInOnePuzzle
+    from nytgames.models import BonusWeek
+    from nytgames.models import WordleInOnePuzzle
+    from tests.test_bonus import WEEK
+    from tests.test_bonus import WORDLE_IN_ONE
     nyt.bonus_week.return_value = BonusWeek(**WEEK)
     nyt.bonus_puzzle.return_value = WordleInOnePuzzle(**WORDLE_IN_ONE)
     assert data(call("bonus_puzzle", {"game": "wordle-in-one"}))["rounds"][0] == {"start": "aaaaa"}

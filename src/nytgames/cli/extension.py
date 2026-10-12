@@ -23,6 +23,7 @@ Example, a ``mytool`` command with every nytg command plus a ``db`` group::
 Commands get nytg's root options (--profile, --cookies, --format and
 --version) and error handling for free.
 """
+import datetime
 from typing import Any
 
 from nytgames import NYTGamesClient
@@ -93,7 +94,7 @@ def get_setting(key: str) -> str | None:
     return state.config.get(state.active_profile, key)
 
 
-def parse_date(value: str, game: str | None = None):
+def parse_date(value: str, game: str | None = None) -> datetime.date:
     """Parse a date argument like nytg does: YYYY-MM-DD, today, yesterday,
     tomorrow, a weekday, or "first" for a game. Raises a usage error if invalid.
     """
