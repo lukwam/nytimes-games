@@ -116,6 +116,12 @@ midis = client.archive("crossword_midi", "2026-09-01", "2026-09-30")
 client.crossword_game([p.id for p in midis], "midi")   # up to 30 IDs per call
 ```
 
+### Read-only
+
+The library never writes anything to NYT. Every request it makes is a GET,
+so it can't change your saved games, stats or streaks. The test suite checks
+that every request is a GET.
+
 ### Puzzle structure
 
 The models include helpers for working with a puzzle's structure, for
@@ -564,12 +570,26 @@ running your own instance in a container.
 NYT errors are returned with NYT's status code, for example 404 for a date
 with no puzzle.
 
+## How it works
+
+NYT's games load their puzzles and your saved games from JSON endpoints on
+www.nytimes.com, none of which need a login for puzzles:
+
+- **Puzzles** come from one endpoint per game and date, such as
+  `/svc/wordle/v2/2025-06-12.json`.
+- **Your saved games and stats** come from the games' state endpoint,
+  `/svc/games/state/{game}/latests`, with your `NYT-S` cookie.
+- **Spelling Bee's** game page embeds the current puzzles in a script.
+- **WordleBot's** summaries are static files on static01.nyt.com.
+
+[docs/endpoints.md](docs/endpoints.md) has the details: endpoints, limits and quirks.
+
 ## Staying current with NYT
 
 NYT changes these APIs without notice. Every morning a
 [live check](https://github.com/lukwam/nytimes-games/actions/workflows/live.yml)
-fetches a real puzzle from every game and endpoint, and exports today's Mini
-to every file format. The **NYT live check** badge above shows the latest
+fetches a real puzzle from every game and endpoint, exports today's Mini
+to every file format and runs the live tests. The **NYT live check** badge above shows the latest
 result and date, and failures open an issue automatically.
 
 ## Contributing

@@ -8,8 +8,8 @@ from nytgames.exceptions import NYTGamesAuthenticationError  # noqa: E402
 from nytgames.exceptions import NYTGamesError  # noqa: E402
 from nytgames.exceptions import NYTGamesExportError  # noqa: E402
 from nytgames.exceptions import NYTGamesHTTPError  # noqa: E402
-from nytgames.exceptions import NYTGamesNotFoundError  # noqa: E402
 from nytgames.exceptions import NYTGamesNoProfileError  # noqa: E402
+from nytgames.exceptions import NYTGamesNotFoundError  # noqa: E402
 from nytgames.exceptions import NYTGamesParseError  # noqa: E402
 from nytgames.exceptions import NYTGamesRateLimitError  # noqa: E402
 from nytgames.models import ArchiveGame  # noqa: E402

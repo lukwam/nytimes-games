@@ -16,8 +16,8 @@ from nytgames import NYTGamesAuthenticationError
 from nytgames import NYTGamesNoProfileError
 from nytgames import NYTGamesNotFoundError
 from nytgames import NYTGamesRateLimitError
-from nytgames.cli import dates
 from nytgames.cli import app as cli_main
+from nytgames.cli import dates
 from nytgames.cli import output
 from nytgames.cli.state import State
 from nytgames.models import ArchivePuzzle
@@ -449,4 +449,3 @@ def test_badges(client):
     assert [r["id"] for r in earned] == ["st4"]
     assert client.badges.call_args.args[0] == ["wordleV2", "connections", "strands", "spelling_bee"]
     assert "Found Theme Words" in run("badges").stdout
-

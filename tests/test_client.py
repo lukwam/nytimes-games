@@ -22,7 +22,9 @@ def session():
     response = session.get.return_value
     response.status_code = 200
     response.raise_for_status.return_value = None
-    return session
+    yield session
+    # The library is read-only: every request any client test makes must be a GET.
+    assert {call[0] for call in session.method_calls if not call[0].startswith("get().")} <= {"get"}
 
 
 @pytest.mark.parametrize("cookies", [

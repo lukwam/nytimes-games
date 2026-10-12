@@ -14,8 +14,8 @@ from rich.text import Text
 
 from nytgames import formats
 from nytgames import views
-from nytgames.cli.output import console
 from nytgames.cli.output import FormatOption
+from nytgames.cli.output import console
 from nytgames.cli.output import emit
 from nytgames.cli.output import key_value_table
 from nytgames.cli.state import date_arg

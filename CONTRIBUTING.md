@@ -26,6 +26,14 @@ pytest
 
 The tests mock NYT, so they run offline and don't need cookies.
 
+Lint with ruff, which CI also runs, or install the pre-commit hooks to run it
+on every commit:
+
+```bash
+ruff check
+pre-commit install
+```
+
 Run the API locally with auto-reload:
 
 ```bash
@@ -57,16 +65,31 @@ src/nytgames/
         output.py    --format handling, shared by every command
         extension.py Public API for tools built on nytg; keep it backwards compatible
 tests/
-examples/api/        Example main.py and Dockerfile for running your own API
-docs/                The README screenshot; regenerate it with docs/make_screenshot.py
+examples/            Small scripts built on the package, and an example API with a Dockerfile
+docs/                endpoints.md: the endpoints, limits and quirks behind each game; and the
+                     README screenshot, regenerated with docs/make_screenshot.py
 ```
+
+## How the client works
+
+Each client method is a generator in `_Operations` that yields
+`transport.Request`s and receives the decoded responses. `run_sync` drives
+it with a `requests` session and `run_async` with an `httpx.AsyncClient`, so
+a new endpoint only has to be written once. Errors from a request are thrown
+into the generator, so an operation can catch a 404 and stop.
+
+Cookies are only sent to `www.nytimes.com` (or the client's `base_url`),
+never to other hosts such as `static01.nyt.com`. Every request is a GET;
+the tests fail if a client sends anything else.
 
 ## Checking against NYT
 
-The tests mock NYT. To check the real APIs, run the same live check that runs
-every morning in GitHub Actions:
+The tests mock NYT. To check the real APIs, run the live tests (about one
+request each) or the full live check that runs every morning in GitHub
+Actions:
 
 ```bash
+pytest -m live
 python scripts/live_check.py
 ```
 
@@ -86,7 +109,8 @@ Set `NYT_COOKIES` to also check the endpoints that need cookies.
    format works. Hide answers unless `--answers` is given.
 3. Add tests that mock the NYT response, and check the method against NYT
    before opening a pull request.
-4. Update the tables in `README.md` and add a line to `CHANGELOG.md`.
+4. Update the tables in `README.md`, note anything new about the endpoint in
+   `docs/endpoints.md`, and add a line to `CHANGELOG.md`.
 
 ## Pull requests
 

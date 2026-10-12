@@ -17,13 +17,13 @@ from rich.progress import TextColumn
 from rich.progress import TimeRemainingColumn
 
 from nytgames import NYTGamesAuthenticationError
-from nytgames import __version__
 from nytgames import NYTGamesClient
 from nytgames import NYTGamesHTTPError
 from nytgames import NYTGamesNotFoundError
+from nytgames import __version__
 from nytgames import formats
-from nytgames.cli.dates import date_range
 from nytgames.cli import dates
+from nytgames.cli.dates import date_range
 from nytgames.cli.output import FormatOption
 from nytgames.cli.output import emit
 from nytgames.cli.output import err_console
@@ -88,7 +88,9 @@ def archive(
     game: Annotated[ArchiveGame, typer.Argument(help="The game to archive.")],
     start: Annotated[str, typer.Option("--from", help='First date, or "first" for the first puzzle.')] = "today",
     end: Annotated[str, typer.Option("--to", help="Last date.")] = "today",
-    out: Annotated[Path, typer.Option("--out", "-o", help="Directory to save into.", file_okay=False)] = Path("nyt-archive"),
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="Directory to save into.", file_okay=False)
+    ] = Path("nyt-archive"),
     delay: Annotated[float, typer.Option(help="Seconds to wait between requests.", min=0)] = 0.25,
     overwrite: Annotated[bool, typer.Option(help="Download dates that are already saved.")] = False,
     file_format: Annotated[

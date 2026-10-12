@@ -14,8 +14,8 @@ from nytgames.cli.output import FormatOption
 from nytgames.cli.output import console
 from nytgames.cli.output import emit
 from nytgames.cli.output import key_value_table
+from nytgames.cli.state import COOKIES_ENV
 from nytgames.cli.state import state
-
 
 
 def mask(value: str) -> str:
@@ -190,7 +190,7 @@ def profiles_delete(name: str) -> None:
 
 def build_auth_app() -> typer.Typer:
     """Return a new `auth` command group."""
-    app = typer.Typer(help="Log in with your NYT cookies and check them.", no_args_is_help=True)
+    app = typer.Typer(help=f"Log in with your NYT cookies (or set {COOKIES_ENV}) and check them.", no_args_is_help=True)
     app.command("login")(login)
     app.command("status")(status)
     app.command("logout")(logout)

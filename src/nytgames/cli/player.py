@@ -11,16 +11,15 @@ from rich.table import Table
 from rich.text import Text
 
 from nytgames import views
-from nytgames.views import percent
-from nytgames.cli.dates import format_seconds
 from nytgames.cli import dates
+from nytgames.cli.dates import format_seconds
 from nytgames.cli.output import FormatOption
 from nytgames.cli.output import emit
 from nytgames.cli.output import err_console
 from nytgames.cli.output import key_value_table
 from nytgames.cli.state import date_arg
 from nytgames.cli.state import state
-
+from nytgames.views import percent
 
 FromOption = Annotated[
     Optional[str], typer.Option("--from", help='First date, or "first" (default: 30 days ago).')
@@ -176,11 +175,12 @@ def crossword_table(data):
     for name in ("mini", "midi"):
         s = data.get(name)
         if s:
+            streaks = s.get("streaks") or {}
             yield key_value_table({
                 "Solved": f"{s['puzzlesSolved']} of {s['puzzlesStarted']}",
                 "Average": format_seconds(s["avgTimeSeconds"]),
                 "Best": f"{format_seconds(s.get('bestTimeSeconds'))} ({s.get('bestDate')})",
-                "Streak": f"{(s.get('streaks') or {}).get('current')} (longest {(s.get('streaks') or {}).get('longest')})",
+                "Streak": f"{streaks.get('current')} (longest {streaks.get('longest')})",
             }, title=f"[bold]{name.title()}[/bold]")
 
 

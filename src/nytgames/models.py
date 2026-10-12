@@ -1,11 +1,12 @@
 """NYT Games models."""
 import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import List
-from typing import TYPE_CHECKING
+
 from pydantic import BaseModel
 from pydantic import BeforeValidator
 from pydantic import ConfigDict

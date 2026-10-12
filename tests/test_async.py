@@ -17,7 +17,13 @@ WORDLE = {"id": 1, "solution": "cigar", "print_date": "2021-06-19"}
 
 def client_for(handler, **kwargs) -> AsyncNYTGamesClient:
     kwargs.setdefault("backoff", 0)
-    return AsyncNYTGamesClient(http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)), **kwargs)
+
+    def get_only(request):
+        # The library is read-only: every request any async test makes must be a GET.
+        assert request.method == "GET", request
+        return handler(request)
+
+    return AsyncNYTGamesClient(http_client=httpx.AsyncClient(transport=httpx.MockTransport(get_only)), **kwargs)
 
 
 def run(coro):

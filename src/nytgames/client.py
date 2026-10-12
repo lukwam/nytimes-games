@@ -6,14 +6,15 @@ import inspect
 import json
 import logging
 import re
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Iterable
 from typing import Mapping
 
 import requests
+from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
 
 from nytgames import __version__
 from nytgames.exceptions import NYTGamesNoProfileError
@@ -42,9 +43,9 @@ from nytgames.models import StrandsPuzzle
 from nytgames.models import TrophyCase
 from nytgames.models import WordleBotAnalysis
 from nytgames.models import WordleBotSummary
-from nytgames.models import WordlePuzzle
 from nytgames.models import WordleInOneLatest
 from nytgames.models import WordleInOnePuzzle
+from nytgames.models import WordlePuzzle
 from nytgames.models import WordlePuzzlesList
 from nytgames.transport import RETRY_STATUSES
 from nytgames.transport import Request
@@ -52,6 +53,9 @@ from nytgames.transport import http_error
 from nytgames.transport import retry_after  # noqa: F401  (public before transport.py)
 from nytgames.transport import run_async
 from nytgames.transport import run_sync
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = logging.getLogger(__name__)
 

@@ -319,7 +319,8 @@ def test_badges(nyt):
 
 def test_bonus_routes(nyt):
     """Bonus routes use the bonus week, puzzle and game state endpoints."""
-    from tests.test_bonus import WEEK, WORDLE_IN_ONE
+    from tests.test_bonus import WEEK
+    from tests.test_bonus import WORDLE_IN_ONE
     nyt.return_value = mock_response({"bonus_puzzles_week": WEEK})
     assert client.get("/bonus/week/2026-10-07").json()["puzzles"][0]["slug"] == "2026-10-07-8"
     nyt.return_value = mock_response(WORDLE_IN_ONE)
@@ -338,3 +339,11 @@ def test_player_stats_without_games_profile(nyt):
     response = client.get("/player/stats")
     assert response.status_code == 404
     assert "no NYT Games profile" in response.json()["detail"]
+
+
+def test_openapi_lists_every_route_under_a_tag():
+    schema = client.get("/openapi.json").json()
+    tags = {tag["name"] for tag in schema["tags"]}
+    for path, methods in schema["paths"].items():
+        assert set(methods) == {"get"}, path  # read-only
+        assert set(methods["get"]["tags"]) <= tags, path

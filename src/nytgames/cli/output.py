@@ -81,8 +81,11 @@ def emit(data: Any, fmt: str | None = None, table: TableRenderer | None = None) 
         else:
             sys.stdout.write(text + "\n")
     elif fmt == "yaml":
-        import yaml
-
+        try:
+            import yaml
+        except ImportError:
+            raise typer.BadParameter("The yaml format needs PyYAML: pip install pyyaml",
+                                     param_hint="'--format'") from None
         sys.stdout.write(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
     elif fmt == "csv":
         write_csv(data)

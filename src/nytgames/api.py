@@ -36,10 +36,10 @@ except ImportError as err:  # pragma: no cover
 
 import requests
 
-from nytgames import __version__
 from nytgames import NYTGamesClient
 from nytgames import NYTGamesNoProfileError
 from nytgames import NYTGamesParseError
+from nytgames import __version__
 from nytgames import formats
 from nytgames import spelling_bee_hints
 from nytgames.models import ArchiveGame
@@ -62,9 +62,9 @@ from nytgames.models import StrandsLatest
 from nytgames.models import StrandsPuzzle
 from nytgames.models import TrophyCase
 from nytgames.models import WordleBotAnalysis
+from nytgames.models import WordleBotSummary
 from nytgames.models import WordleInOneLatest
 from nytgames.models import WordleInOnePuzzle
-from nytgames.models import WordleBotSummary
 from nytgames.models import WordlePuzzle
 from nytgames.models import WordlePuzzlesList
 
@@ -72,6 +72,8 @@ __all__ = ["add_exception_handlers", "app", "create_app", "get_client", "router"
 
 OPENAPI_TAGS = [
     {"name": "Archive", "description": "Puzzle IDs and dates for a date range"},
+    {"name": "Badges", "description": "Badges and your progress toward them"},
+    {"name": "Bonus Puzzles", "description": "The weekly Bonus Puzzles drop and your bonus games"},
     {"name": "Connections", "description": "Connections Puzzles operations"},
     {"name": "Crosswords", "description": "Crossword Puzzles operations"},
     {"name": "Crosswords - Bonus", "description": "Crossword Bonus Puzzles operations"},

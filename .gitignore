@@ -6,3 +6,4 @@ dist/
 .pytest_cache/
 .coverage
 coverage.json
+.ruff_cache/

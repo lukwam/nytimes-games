@@ -10,6 +10,8 @@ from nytgames import NYTGamesClient
 from nytgames.cli.config import Config
 from nytgames.cli.dates import parse_date
 
+COOKIES_ENV = "NYT_COOKIES"
+
 
 @dataclass
 class State:
@@ -28,8 +30,8 @@ class State:
         """Return the cookies to use and where they came from."""
         if self.cookies:
             return self.cookies, "--cookies"
-        if os.environ.get("NYT_COOKIES"):
-            return os.environ["NYT_COOKIES"], "NYT_COOKIES"
+        if os.environ.get(COOKIES_ENV):
+            return os.environ[COOKIES_ENV], COOKIES_ENV
         cookies = self.config.get(self.active_profile, "cookies")
         if cookies:
             return cookies, f"profile {self.active_profile!r}"
