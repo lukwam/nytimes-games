@@ -4,6 +4,15 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- `NYTGamesParseError` messages no longer include dictionary keys taken from
+  NYT's response, which could be private too. Field paths keep the models'
+  own field names and list indexes, and show anything else as `*`, as in
+  `average.*: float_type`. (#44)
+
 ## 0.11.1 (2026-10-12)
 
 ### Fixed
