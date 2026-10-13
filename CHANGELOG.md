@@ -8,6 +8,12 @@ versions may include breaking changes.
 
 ### Fixed
 
+- Source distributions include the whole test tree (`tests/__init__.py`,
+  `support.py`, `conftest.py` and the fixtures), the scripts the tests load,
+  and the docs and contributor files, so an extracted sdist runs its own
+  offline tests. CI and the publish workflow check that with
+  `scripts/check_sdist.sh`, which builds a wheel from the extracted sdist
+  and runs its tests away from the checkout. (#66)
 - `nytg archive --overwrite` keeps the saved puzzle if writing its update
   fails. It used to move the file into `revisions/` first, so a failed write
   left it missing; now the old file is copied to `revisions/` and replaced
