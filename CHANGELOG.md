@@ -4,6 +4,18 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- `nytg archive --overwrite` keeps the saved puzzle if writing its update
+  fails. It used to move the file into `revisions/` first, so a failed write
+  left it missing; now the old file is copied to `revisions/` and replaced
+  only once the new one is completely written. `manifest.json` is written
+  the same way, so an interrupted run leaves the previous complete manifest.
+  A file that's on disk but missing from the manifest, as after an
+  interrupted run, is added to the manifest as it is the next time. (#61)
+
 ## 0.11.4 (2026-10-12)
 
 ### Fixed
