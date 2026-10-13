@@ -18,6 +18,15 @@ versions may include breaking changes.
   cookie, it sent that cookie to NYT too. A cookie that can't be sent is now
   a 400 instead of a 500. If you relied on other cookies reaching NYT,
   override `get_client`. (#45)
+- The MCP server's `export_crossword` never replaces a file unless
+  `overwrite` is set. It checked for the file before fetching the puzzle, so
+  a file created in the meantime was overwritten anyway; the file is now
+  created exclusively, and symlinks are never followed. With `overwrite`,
+  the new file is written next to the old one and moved into place, so a
+  failed write keeps the old file. `nytg ... --save` replaces files the same
+  way. (#46)
+- `export_crossword` is marked destructive in its MCP annotations, since
+  `overwrite` replaces files. (#46)
 
 ## 0.11.0 (2026-10-12)
 

@@ -31,6 +31,7 @@ from nytgames.cli import dates
 from nytgames.cli.config import Config
 from nytgames.cli.dates import parse_date
 from nytgames.client import BADGE_GAMES
+from nytgames.files import write_file
 
 try:
     from mcp.server.mcpserver import MCPServer
@@ -58,7 +59,8 @@ the user to run `nytg auth login` or set NYT_COOKIES.
 
 CrosswordType = Literal["daily", "mini", "midi", "bonus"]
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
-WRITES_FILE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
+# Destructive: with overwrite, it replaces an existing file.
+WRITES_FILE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True)
 
 server = MCPServer(name="nytimes-games", version=__version__, instructions=INSTRUCTIONS)
 # The client logs every request at INFO; keep the server's log to warnings and errors.
@@ -366,8 +368,11 @@ def export_crossword(
               else nyt.crossword(type, day(date, f"crossword-{type}").isoformat()))
     game = nyt.crossword_game(puzzle.id, type) if include_progress else None
     data = formats.export(puzzle, fmt, game, title=views.export_title(puzzle, type))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    try:
+        write_file(target, data, overwrite)
+    except FileExistsError:
+        # Checked again here: the file may have been created while the puzzle was fetched.
+        raise ToolError(f"{target} already exists; set overwrite to replace it") from None
     return {"path": str(target.resolve()), "format": fmt, "bytes": len(data), "puzzle_id": puzzle.id,
             "date": puzzle.publicationDate, "notes": formats.fidelity(puzzle, fmt, game)}
 

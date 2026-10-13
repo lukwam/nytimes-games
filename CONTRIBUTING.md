@@ -53,6 +53,7 @@ src/nytgames/
     spelling_bee.py  Spelling Bee hints
     badges.py        Badge names, descriptions and artwork, from badges.json
     formats.py       Crossword export: .puz, .ipuz and Crossword Compiler .xml
+    files.py         Writing exported files without replacing them by accident
     structure.py     Crossword entries and squares, Strands word paths
     api.py           Optional FastAPI app and router (the "api" extra)
     views.py         Plain data views shared by nytg and the MCP server
