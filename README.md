@@ -234,9 +234,14 @@ except NYTGamesNotFoundError:
 ### Network behavior
 
 Failed connections, timeouts, rate limits (429) and NYT server errors are
-retried up to 3 times with exponential backoff, honoring NYT's `Retry-After`
-header. Adjust with `NYTGamesClient(retries=5, backoff=1.0, timeout=60)`, or
+retried up to 3 times with exponential backoff (up to 60 seconds between
+tries). Adjust with `NYTGamesClient(retries=5, backoff=1.0, timeout=60)`, or
 turn retries off with `retries=0`.
+
+NYT's `Retry-After` is always honored: the client waits as long as it asks,
+up to 5 minutes. If it asks for longer, the client doesn't retry early; it
+raises the error at once, and `NYTGamesRateLimitError.retry_after` says how
+many seconds to wait.
 
 You can pass your own `httpx.Client` (or `httpx.AsyncClient` for the async
 client) as `http_client`, for example to add caching or a proxy. The client
