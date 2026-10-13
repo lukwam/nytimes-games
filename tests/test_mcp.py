@@ -59,6 +59,8 @@ def test_tools_are_listed_with_descriptions_and_annotations():
     for name, t in tools.items():
         assert t.description and len(t.description) > 40, name
         assert t.annotations.read_only_hint is (name != "export_crossword"), name
+    # With overwrite, export_crossword can replace a file.
+    assert tools["export_crossword"].annotations.destructive_hint is True
     assert tools["crossword"].input_schema["properties"]["type"]["enum"] == ["daily", "mini", "midi", "bonus"]
 
 
@@ -109,6 +111,28 @@ def test_export_crossword(nyt, tmp_path):
     nyt.crossword.return_value = crossword_puzzle(**{"body.0.cells.0.label": "CW"})
     failed = call("export_crossword", {"path": str(tmp_path / "x.ipuz")})
     assert failed.is_error and "squares labeled with text" in failed.content[0].text
+
+
+def test_export_never_replaces_a_file_created_during_the_fetch(nyt, tmp_path):
+    """overwrite=False holds when the file appears after the first check (#46)."""
+    path = tmp_path / "race.puz"
+
+    def created_meanwhile(*args, **kwargs):
+        path.write_bytes(b"USER_FILE_CREATED_DURING_FETCH")
+        return crossword_puzzle()
+
+    nyt.crossword.side_effect = created_meanwhile
+    result = call("export_crossword", {"path": str(path), "type": "mini", "date": "2025-06-12"})
+    assert result.is_error and "already exists" in result.content[0].text
+    assert path.read_bytes() == b"USER_FILE_CREATED_DURING_FETCH"
+
+
+def test_export_overwrite_replaces_the_file(nyt, tmp_path):
+    path = tmp_path / "mini.puz"
+    path.write_bytes(b"old")
+    data(call("export_crossword", {"path": str(path), "overwrite": True}))
+    assert path.read_bytes()[2:14] == b"ACROSS&DOWN\0"
+    assert [p.name for p in tmp_path.iterdir()] == ["mini.puz"]
 
 
 def test_cookies_come_from_the_environment_then_the_profile(tmp_path, monkeypatch):
