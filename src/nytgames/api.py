@@ -8,9 +8,10 @@ Run the ready-made app with ``uvicorn nytgames.api:app``, build your own with
 ``create_app()``, or mount ``router`` in an existing FastAPI app (then call
 ``add_exception_handlers()`` on that app too).
 
-By default each request is made with the cookies sent to the API. To use other
-cookies, such as your own from a secret, override the ``get_client``
-dependency::
+By default each request is made with the NYT login cookie (``NYT-S``) sent to
+the API; other cookies, such as your own app's session cookie, are never
+passed on to NYT. To use other cookies, such as your own from a secret,
+override the ``get_client`` dependency::
 
     app = create_app()
     app.dependency_overrides[get_client] = lambda: NYTGamesClient(cookies=...)
@@ -89,13 +90,21 @@ OPENAPI_TAGS = [
     {"name": "WordleBot", "description": "WordleBot analysis and daily summaries"},
 ]
 
+#: The only cookies passed on to NYT: the login cookie.
+NYT_COOKIES = ("NYT-S",)
+
 router = APIRouter()
 
 
 def get_client(request: Request) -> Iterator[NYTGamesClient]:
-    """Yield an NYT Games client using the cookies sent with the request,
+    """Yield an NYT Games client using the NYT cookies sent with the request,
     and close it after the response."""
-    with NYTGamesClient(cookies=request.cookies) as client:
+    cookies = {name: request.cookies[name] for name in NYT_COOKIES if request.cookies.get(name)}
+    try:
+        client = NYTGamesClient(cookies=cookies)
+    except ValueError as err:  # the message never includes cookie values
+        raise HTTPException(status_code=400, detail=str(err)) from None
+    with client:
         yield client
 
 

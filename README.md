@@ -494,7 +494,8 @@ app.include_router(router, prefix="/nyt")
 add_exception_handlers(app)   # NYT errors become 404s and 403s instead of 500s
 ```
 
-By default each request is made with the cookies sent to the API:
+By default each request is made with the `NYT-S` cookie sent to the API. Other
+cookies, such as your own app's session cookie, are never passed on to NYT:
 
 ```bash
 curl -H "Cookie: NYT-S=..." http://localhost:8000/player/stats

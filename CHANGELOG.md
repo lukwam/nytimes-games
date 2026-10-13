@@ -13,6 +13,11 @@ versions may include breaking changes.
   start and `nytg` failed on Linux, with `ZoneInfoNotFoundError`. CI now
   installs each extra alone, on Linux and Windows, and checks New York time
   without a system database. (#47)
+- The REST API passes only the `NYT-S` login cookie on to NYT. It used to
+  forward every cookie sent to it, so mounted in an app with its own session
+  cookie, it sent that cookie to NYT too. A cookie that can't be sent is now
+  a 400 instead of a 500. If you relied on other cookies reaching NYT,
+  override `get_client`. (#45)
 
 ## 0.11.0 (2026-10-12)
 
