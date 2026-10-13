@@ -4,6 +4,16 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- The `mcp` and `cli` extras install `tzdata` on every platform. Without a
+  system time zone database (Windows, slim containers), `nytg-mcp` failed to
+  start and `nytg` failed on Linux, with `ZoneInfoNotFoundError`. CI now
+  installs each extra alone, on Linux and Windows, and checks New York time
+  without a system database. (#47)
+
 ## 0.11.0 (2026-10-12)
 
 ### Changed

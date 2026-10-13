@@ -49,12 +49,14 @@ dependencies = [
 # Kept so `pip install "nytimes-games[async]"` still works; httpx is now a core dependency.
 async = []
 api = ["fastapi>=0.111", "uvicorn>=0.30"]
-mcp = ["mcp>=2.3"]
+# The MCP server and CLI work in New York time; tzdata supplies it where the
+# system has no time zone database (Windows, slim containers).
+mcp = ["mcp>=2.3", "tzdata"]
 cli = [
     "pyyaml>=6",
     "rich>=13",
     "typer>=0.12",
-    "tzdata; sys_platform == 'win32'",
+    "tzdata",
 ]
 test = ["fastapi>=0.111", "ipuz", "puzpy", "pytest", "pyyaml>=6", "pytest-asyncio", "pytest-cov", "respx", "rich>=13", "ruff", "typer>=0.12", "xmlschema", "mcp>=2.3"]
 
