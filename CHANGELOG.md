@@ -12,6 +12,10 @@ versions may include breaking changes.
   NYT's response, which could be private too. Field paths keep the models'
   own field names and list indexes, and show anything else as `*`, as in
   `average.*: float_type`. (#44)
+- A crossword exported with `overwrite` (or saved with `nytg ... --save`) to
+  a new file got 0644 permissions even under a stricter umask, such as 077.
+  New files now get the permissions your umask allows with or without
+  `overwrite`, and a replaced file keeps its own. (#46)
 
 ## 0.11.1 (2026-10-12)
 
