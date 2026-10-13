@@ -4,6 +4,16 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- When a crossword export or `nytg ... --save` replaced a file with
+  `overwrite`, the new content sat in a temporary file readable under your
+  umask (often 0644) until it was moved into place, even when the file being
+  replaced was private. The temporary file is now private (0600) while it
+  holds the data; the final file's permissions are unchanged. (#56)
+
 ## 0.11.2 (2026-10-12)
 
 ### Fixed
