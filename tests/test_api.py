@@ -274,6 +274,26 @@ def test_cookies_are_forwarded_to_nyt(mock):
     assert dict(route.calls.last.request.url.params) == {"puzzle_ids": "0"}
 
 
+def test_only_the_nyt_login_cookie_is_forwarded(mock):
+    """Other cookies sent to the API, such as a host app's session, never reach NYT."""
+    route = mock.get(f"{NYT}/svc/games/state/wordleV2/latests").respond(json=STATE_LATESTS)
+    cookies = {**COOKIES, "host_app_session": "synthetic-host-cookie", "csrftoken": "synthetic-csrf"}
+    assert TestClient(main.app, cookies=cookies).get("/player/stats").status_code == 200
+    assert route.calls.last.request.headers["Cookie"] == f"NYT-S={COOKIES['NYT-S']}"
+    route = mock.get(f"{NYT}/svc/wordle/v2/2025-06-12.json").respond(json=load("wordle/2025-06-12.json"))
+    assert TestClient(main.app, cookies={"host_app_session": "x"}).get("/wordle/2025-06-12").status_code == 200
+    assert "Cookie" not in route.calls.last.request.headers
+
+
+def test_cookies_that_cannot_be_sent_are_a_400(mock, monkeypatch):
+    def reject(**kwargs):
+        raise ValueError("The NYT-S cookie's value has characters that can't be sent")
+    monkeypatch.setattr(main, "NYTGamesClient", reject)
+    response = TestClient(main.app, cookies=COOKIES).get("/wordle/2025-06-12")
+    assert response.status_code == 400 and "can't be sent" in response.json()["detail"]
+    assert not mock.calls
+
+
 def test_no_cookies_are_sent_without_request_cookies(mock):
     """Without cookies on the API request, none are sent to NYT."""
     route = mock.get(f"{NYT}/svc/wordle/v2/2025-06-12.json").respond(json=load("wordle/2025-06-12.json"))
