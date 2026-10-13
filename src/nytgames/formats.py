@@ -88,6 +88,16 @@ class Grid:
         return index % self.width, index // self.width
 
 
+def _square_index(value, count: int) -> int | None:
+    """Return a saved-progress index as a square number, or None unless it's
+    a non-negative whole number (or string of digits) less than `count`."""
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < count:
+        return value
+    return None
+
+
 def game_data(game: Game) -> CrosswordGameData | None:
     """Return the saved game data from any of the game state models."""
     if isinstance(game, CrosswordGame):
@@ -152,19 +162,20 @@ def to_grid(puzzle: CrosswordPuzzle, game: Game = None, title: str | None = None
 
     data = game_data(game)
     if data is not None:
+        # Saved progress is optional: entries that don't name a square of
+        # this grid, such as negative or non-numeric indexes, are skipped.
         extra = data.model_extra or {}
-        revealed = set(extra.get("revealed") or [])
-        penciled = set(extra.get("penciled") or [])
-        for key, value in (data.cells or {}).items():
-            index = int(key)
-            if index < len(squares) and not squares[index].block and isinstance(value, str):
+        cells = data.cells if isinstance(data.cells, dict) else {}
+        for key, value in cells.items():
+            index = _square_index(key, len(squares))
+            if index is not None and not squares[index].block and isinstance(value, str):
                 squares[index].fill = value
-        for index in revealed:
-            if index < len(squares):
-                squares[index].revealed = True
-        for index in penciled:
-            if index < len(squares):
-                squares[index].penciled = True
+        for name in ("revealed", "penciled"):
+            marked = extra.get(name)
+            for item in marked if isinstance(marked, list) else []:
+                index = _square_index(item, len(squares))
+                if index is not None:
+                    setattr(squares[index], name, True)
 
     date = datetime.date.fromisoformat(puzzle.publicationDate)
     notes = " ".join(
