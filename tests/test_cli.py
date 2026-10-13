@@ -6,6 +6,7 @@ import datetime
 import json
 import stat
 import sys
+from pathlib import Path
 from unittest import mock
 
 import httpx
@@ -347,6 +348,68 @@ def test_archive_manifest_and_revisions(client, tmp_path):
     assert json.loads((out / "wordle" / "2025-06-12.json").read_text())["editor"] == "Fixed"
     record = json.loads((out / "wordle" / "manifest.json").read_text())["files"]["2025-06-12.json"]
     assert record["revisions"][0]["file"] == f"revisions/{revisions[0].name}"
+
+
+ARCHIVE_ARGS = ["archive", "wordle", "--from", "2025-06-12", "--to", "2025-06-12", "--delay", "0", "-f", "json"]
+
+
+def fail_replacing(monkeypatch, name):
+    """Make os.replace fail when it would replace the file called `name`."""
+    from nytgames import files
+    real = files.os.replace
+
+    def replace(src, dst):
+        if Path(dst).name == name:
+            raise OSError("disk full")
+        return real(src, dst)
+
+    monkeypatch.setattr(files.os, "replace", replace)
+
+
+def test_archive_failed_update_keeps_the_file_and_manifest(client, tmp_path, monkeypatch):
+    """A failed write never removes the saved puzzle or breaks the manifest (#61)."""
+    out = tmp_path / "archive"
+    client.wordle.return_value = WORDLE
+    run(*ARCHIVE_ARGS, "-o", str(out))
+    saved = (out / "wordle" / "2025-06-12.json").read_bytes()
+    manifest = (out / "wordle" / "manifest.json").read_text()
+
+    client.wordle.return_value = WORDLE.model_copy(update={"editor": "Fixed"})
+    fail_replacing(monkeypatch, "2025-06-12.json")
+    assert run(*ARCHIVE_ARGS, "-o", str(out), "--overwrite").exit_code != 0
+    assert (out / "wordle" / "2025-06-12.json").read_bytes() == saved
+    assert json.loads((out / "wordle" / "manifest.json").read_text()) == json.loads(manifest)
+    leftovers = [p.name for p in (out / "wordle").rglob("*") if p.name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_archive_failed_manifest_write_keeps_the_previous_manifest(client, tmp_path, monkeypatch):
+    out = tmp_path / "archive"
+    client.wordle.return_value = WORDLE
+    run(*ARCHIVE_ARGS, "-o", str(out))
+    manifest = (out / "wordle" / "manifest.json").read_text()
+
+    fail_replacing(monkeypatch, "manifest.json")
+    assert run(*ARCHIVE_ARGS, "-o", str(out), "--overwrite").exit_code != 0
+    assert (out / "wordle" / "manifest.json").read_text() == manifest
+
+
+def test_archive_records_files_missing_from_the_manifest(client, tmp_path):
+    """A file saved without a manifest entry, as by an interrupted run, is
+    recorded as it is on the next run, and gets a revision when it changes."""
+    out = tmp_path / "archive"
+    (out / "wordle").mkdir(parents=True)
+    (out / "wordle" / "2025-06-12.json").write_text("{}")
+    client.wordle.return_value = WORDLE
+
+    assert json.loads(run(*ARCHIVE_ARGS, "-o", str(out)).stdout)["skipped"] == 1
+    record = json.loads((out / "wordle" / "manifest.json").read_text())["files"]["2025-06-12.json"]
+    assert record == {"date": "2025-06-12", "retrieved_at": None,
+                      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+    assert not client.wordle.called
+
+    assert json.loads(run(*ARCHIVE_ARGS, "-o", str(out), "--overwrite").stdout)["updated"] == ["2025-06-12"]
+    assert [p.name for p in (out / "wordle" / "revisions").iterdir()] == ["2025-06-12.unknown.json"]
 
 
 def test_nyt_cookies_json_export(monkeypatch):
