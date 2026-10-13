@@ -1,5 +1,5 @@
 """Unofficial client for the New York Times Games APIs."""
-__version__ = "0.11.3"
+__version__ = "0.11.4"
 
 from nytgames.client import AsyncNYTGamesClient  # noqa: E402
 from nytgames.client import NYTGamesClient  # noqa: E402
