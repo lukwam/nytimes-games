@@ -14,6 +14,13 @@ versions may include breaking changes.
   offline tests. CI and the publish workflow check that with
   `scripts/check_sdist.sh`, which builds a wheel from the extracted sdist
   and runs its tests away from the checkout. (#66)
+- A `Retry-After` longer than 60 seconds is no longer cut short. The client
+  waits as long as NYT asks, up to 5 minutes; for a longer wait it raises
+  the error at once instead of retrying early, with
+  `NYTGamesRateLimitError.retry_after` set. The exponential backoff is still
+  capped at 60 seconds, and a `Retry-After` that isn't a finite number of
+  seconds or a date is ignored. (#64)
+
 - `nytg archive --overwrite` keeps the saved puzzle if writing its update
   fails. It used to move the file into `revisions/` first, so a failed write
   left it missing; now the old file is copied to `revisions/` and replaced
