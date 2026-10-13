@@ -220,7 +220,7 @@ as `.status_code` and the `httpx.Response` as `.response`:
 | `NYTGamesNotFoundError` | 404, for example a date with no puzzle |
 | `NYTGamesRateLimitError` | 429 after retrying; `retry_after` has NYT's suggested wait, if any |
 | `NYTGamesHTTPError` | any other HTTP error |
-| `NYTGamesParseError` | an NYT page didn't contain the expected game data (a `ValueError`) |
+| `NYTGamesParseError` | NYT's response or page wasn't in the expected format (a `ValueError`); the message names the fields, never their values |
 
 ```python
 from nytgames import NYTGamesNotFoundError

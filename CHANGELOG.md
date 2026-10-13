@@ -27,6 +27,17 @@ versions may include breaking changes.
   way. (#46)
 - `export_crossword` is marked destructive in its MCP annotations, since
   `overwrite` replaces files. (#46)
+- A response from NYT that's valid JSON but the wrong shape raises
+  `NYTGamesParseError`, as documented. It used to escape as Pydantic's
+  `ValidationError` or a `TypeError`, so the REST API answered 500 instead
+  of 502. If you caught those, catch `NYTGamesParseError` (a `ValueError`)
+  instead. (#44)
+- Errors never include NYT's response values, which can be your saved games.
+  `NYTGamesParseError` names the model, fields and error types only; the
+  models hide input values in validation errors; and the MCP server, CLI and
+  live check report these errors without them. The live check reports other
+  unexpected errors by type and location only, since its failures are
+  published in GitHub issues. (#44)
 
 ## 0.11.0 (2026-10-12)
 
