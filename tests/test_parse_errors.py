@@ -23,6 +23,7 @@ from nytgames import mcp_server
 from nytgames.models import WordlePuzzle
 from nytgames.models import parse
 from tests.support import NYT
+from tests.support import load
 
 MARKER = "SYNTHETIC_PRIVATE_INPUT"
 WORDLE = f"{NYT}/svc/wordle/v2/2025-06-12.json"
@@ -141,3 +142,73 @@ def test_live_check_keeps_safe_messages(live_check):
         assert False, "31 dailies"
 
     assert "31 dailies" in live_check.run("Check", failed_assertion)["detail"]
+
+
+# Keys taken from the response can be private too (#44 follow-up): a
+# dictionary key in the response appears in the error's field path.
+SUMMARY = "https://static01.nyt.com/newsgraphics/2022/wordlebot/vixen-2025-06-12/summary.json"
+KEY_MARKER_BODY = {"average": {MARKER: []}}
+
+
+def test_field_paths_hide_keys_from_the_response():
+    from nytgames.models import WordleBotSummary
+    with pytest.raises(NYTGamesParseError) as info:
+        parse(WordleBotSummary, KEY_MARKER_BODY)
+    assert str(info.value) == "NYT's response didn't match WordleBotSummary: average.*: float_type"
+
+
+def test_field_paths_keep_field_names_aliases_and_indexes():
+    from nytgames.models import ConnectionsPuzzle
+    body = {"id": 1, "status": "OK", "print_date": "2025-06-12", "editor": "x",
+            "categories": [{"title": "A", "cards": [{"position": "first"}]}]}
+    with pytest.raises(NYTGamesParseError, match=r"categories\.0\.cards\.0\.position: int_parsing"):
+        parse(ConnectionsPuzzle, body)
+
+
+@pytest.fixture
+def key_marker(mock):
+    mock.get(WORDLE).respond(json=load("wordle/2025-06-12.json"))
+    mock.get(SUMMARY).respond(json=KEY_MARKER_BODY)
+    return mock
+
+
+async def test_clients_hide_keys_from_the_response(api, key_marker):
+    with pytest.raises(NYTGamesParseError, match=r"average\.\*: float_type") as info:
+        await api("wordlebot_summary", "2025-06-12")
+    assert MARKER not in str(info.value)
+
+
+def test_rest_mcp_and_cli_hide_keys_from_the_response(key_marker, monkeypatch, tmp_path, caplog, capsys):
+    response = TestClient(api.app).get("/wordlebot/2025-06-12/summary")
+    assert response.status_code == 502 and MARKER not in response.text
+
+    monkeypatch.setattr(mcp_server, "client", lambda: NYTGamesClient(backoff=0))
+
+    async def call():
+        async with Client(mcp_server.server) as client:
+            return await client.call_tool("wordlebot_summary", {"date": "2025-06-12"})
+
+    with caplog.at_level(logging.DEBUG):
+        result = asyncio.run(call())
+    assert result.is_error and MARKER not in result.content[0].text and MARKER not in caplog.text
+
+    from nytgames.cli import app as cli_main
+    monkeypatch.setenv("NYTG_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("NYT_COOKIES", raising=False)
+    monkeypatch.setattr(sys, "argv", ["nytg", "wordlebot", "2025-06-12"])
+    with pytest.raises(SystemExit):
+        cli_main.main()
+    captured = capsys.readouterr()
+    assert "average.*" in captured.err
+    assert MARKER not in captured.out + captured.err
+
+
+def test_live_check_hides_keys_from_the_response(live_check, capsys):
+    from nytgames.models import WordleBotSummary
+
+    def check():
+        parse(WordleBotSummary, KEY_MARKER_BODY)
+
+    result = live_check.run("Check", check)
+    assert not result["ok"] and "average.*" in result["detail"]
+    assert MARKER not in json.dumps(result) and MARKER not in capsys.readouterr().err
