@@ -4,6 +4,17 @@ All notable changes to this project. The project follows
 [Semantic Versioning](https://semver.org/); while it's below 1.0, minor
 versions may include breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- The temporary file used to replace a file with `overwrite` is private
+  (0600) from the moment it's created. In 0.11.3 it started out readable
+  under your umask and was made private just before the data was written,
+  so a reader that opened it in that moment could still read the data. A
+  new file's permissions now come from an empty file created and removed
+  to find what your umask allows. (#56)
+
 ## 0.11.3 (2026-10-12)
 
 ### Fixed
