@@ -47,6 +47,8 @@ from nytgames.models import WordleInOneLatest
 from nytgames.models import WordleInOnePuzzle
 from nytgames.models import WordlePuzzle
 from nytgames.models import WordlePuzzlesList
+from nytgames.models import parse
+from nytgames.models import parse_list
 from nytgames.transport import NYT_BASE_URL
 from nytgames.transport import Request
 from nytgames.transport import Settings
@@ -130,7 +132,10 @@ def get_game_data(body: str | bytes) -> dict | None:
     if script_tag:
         script_content = script_tag.string
         if script_content.startswith("window.gameData = {"):
-            return json.loads(script_content[len("window.gameData = "):])
+            try:
+                return json.loads(script_content[len("window.gameData = "):])
+            except json.JSONDecodeError:
+                raise NYTGamesParseError("The Spelling Bee page's game data isn't valid JSON") from None
     return None
 
 
@@ -182,8 +187,10 @@ class _Operations:
     def _archive_window(self, game: str, start: datetime.date, end: datetime.date) -> list[ArchivePuzzle]:
         """Fetch one window, splitting it if NYT's 31 puzzle limit may have cut it short."""
         response = (yield Request(f"/svc/games/v1/archive/{game}/{start}/{end}"))
+        if not isinstance(response, list):
+            parse_list(ArchivePuzzle, response)  # raises NYTGamesParseError
         if len(response) < ARCHIVE_DAYS or start == end:
-            return [ArchivePuzzle(**puzzle) for puzzle in response]
+            return parse_list(ArchivePuzzle, response)
         middle = start + (end - start) // 2
         return ((yield from _Operations._archive_window(self, game, start, middle))
                 + (yield from _Operations._archive_window(self, game, middle + datetime.timedelta(days=1), end)))
@@ -197,7 +204,7 @@ class _Operations:
         game state methods only include the three badges on your shelf.
         """
         game = BadgeGame(game).value
-        return TrophyCase(**(yield Request(f"/svc/games/badges/trophy-case/{game}")))
+        return parse(TrophyCase, (yield Request(f"/svc/games/badges/trophy-case/{game}")))
 
     def badges(self, games: Iterable[BadgeGame | str] = BADGE_GAMES) -> TrophyCase:
         """Return every badge for each game (default: all four), in one
@@ -222,7 +229,7 @@ class _Operations:
         response = (yield Request(f"/svc/games/bonus/week/v1/{date}.json"))
         if not isinstance(response, dict) or not isinstance(response.get("bonus_puzzles_week"), dict):
             raise NYTGamesParseError("NYT's bonus week response has no bonus_puzzles_week")
-        return BonusWeek(**response["bonus_puzzles_week"])
+        return parse(BonusWeek, response["bonus_puzzles_week"])
 
     def bonus_weeks(self, date_start: str, date_end: str) -> list[BonusWeek]:
         """Return each week's Bonus Puzzles drop between two dates, oldest
@@ -253,15 +260,15 @@ class _Operations:
 
     def wordle_in_one(self, slug: str) -> WordleInOnePuzzle:
         """Return a Wordle in 1 bonus puzzle by its slug (e.g. 2026-10-07-8)."""
-        return WordleInOnePuzzle(**(yield Request(f"/svc/wordle-in-one/v1/bonus/{slug}.json")))
+        return parse(WordleInOnePuzzle, (yield Request(f"/svc/wordle-in-one/v1/bonus/{slug}.json")))
 
     def connections_bonus(self, slug: str) -> ConnectionsPuzzle:
         """Return a Connections bonus puzzle (Connections 3x3) by its slug."""
-        return ConnectionsPuzzle(**(yield Request(f"/svc/connections/v2/bonus/{slug}.json")))
+        return parse(ConnectionsPuzzle, (yield Request(f"/svc/connections/v2/bonus/{slug}.json")))
 
     def strands_bonus(self, slug: str) -> StrandsPuzzle:
         """Return a Strands bonus puzzle (Colorful Strands) by its slug."""
-        return StrandsPuzzle(**(yield Request(f"/svc/strands/v2/bonus/{slug}.json")))
+        return parse(StrandsPuzzle, (yield Request(f"/svc/strands/v2/bonus/{slug}.json")))
 
     def wordle_in_one_latest(self, puzzle_ids: PuzzleIds = None) -> WordleInOneLatest:
         """Return the user's saved Wordle in 1 games.
@@ -274,12 +281,12 @@ class _Operations:
             "/svc/games/state/wordle_in_one/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
         ))
-        return WordleInOneLatest(**response)
+        return parse(WordleInOneLatest, response)
 
     # Connections
     def connections(self, date: str) -> ConnectionsPuzzle:
         """Return the Connections puzzle for a date (YYYY-MM-DD)."""
-        return ConnectionsPuzzle(**(yield Request(f"/svc/connections/v2/{date}.json")))
+        return parse(ConnectionsPuzzle, (yield Request(f"/svc/connections/v2/{date}.json")))
 
     def connections_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> ConnectionsLatest:
         """Return the user's latest Connections game states.
@@ -293,7 +300,7 @@ class _Operations:
             f"/svc/games/state/{game}/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
         ))
-        return ConnectionsLatest(**response)
+        return parse(ConnectionsLatest, response)
 
     # Crosswords
     def crossword(
@@ -309,7 +316,7 @@ class _Operations:
         publish_type = CrosswordPublishType(publish_type).value
         path = f"/svc/crosswords/v6/puzzle/{publish_type}"
         path = f"{path}/{date}.json" if date else f"{path}.json"
-        return CrosswordPuzzle(**(yield Request(path)))
+        return parse(CrosswordPuzzle, (yield Request(path)))
 
     def crossword_by_id(self, puzzle_id: int | str) -> CrosswordPuzzle:
         """Return a crossword of any type by its puzzle ID.
@@ -317,7 +324,7 @@ class _Operations:
         Use it for dates with more than one puzzle, where crossword(date)
         returns only one of them (archive() lists both).
         """
-        return CrosswordPuzzle(**(yield Request(f"/svc/crosswords/v6/puzzle/{puzzle_id}.json")))
+        return parse(CrosswordPuzzle, (yield Request(f"/svc/crosswords/v6/puzzle/{puzzle_id}.json")))
 
     def crossword_puzzles(
         self,
@@ -349,7 +356,7 @@ class _Operations:
             "date_start": date_start,
             "date_end": date_end,
         }
-        return CrosswordPuzzlesList(**(yield Request("/svc/crosswords/v3/puzzles.json", params=params)))
+        return parse(CrosswordPuzzlesList, (yield Request("/svc/crosswords/v3/puzzles.json", params=params)))
 
     def crossword_game(
         self,
@@ -366,7 +373,7 @@ class _Operations:
             f"/svc/games/state/crossword_{publish_type}/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_id)},
         ))
-        return CrosswordGame(**response)
+        return parse(CrosswordGame, response)
 
     def crossword_oracle(
         self,
@@ -374,7 +381,7 @@ class _Operations:
     ) -> CrosswordOracle:
         """Return the current and next crossword puzzle (daily, mini or midi)."""
         publish_type = CrosswordPublishType(publish_type).value
-        return CrosswordOracle(**(yield Request(f"/svc/crosswords/v2/oracle/{publish_type}.json")))
+        return parse(CrosswordOracle, (yield Request(f"/svc/crosswords/v2/oracle/{publish_type}.json")))
 
     # Player
     def player_stats(self) -> Player:
@@ -393,7 +400,7 @@ class _Operations:
                 "This NYT account has no NYT Games profile yet; NYT creates one when the "
                 "account first plays a game while signed in"
             )
-        return Player(**response["player"])
+        return parse(Player, response["player"])
 
     # Letter Boxed
     def letter_boxed(self, date: str) -> LetterBoxedPuzzle:
@@ -403,7 +410,7 @@ class _Operations:
         or two ahead of time. A few early dates have no puzzle (2018-12-21 to
         2019-01-05 and 2019-01-25) and raise NYTGamesNotFoundError.
         """
-        return LetterBoxedPuzzle(**(yield Request(f"/svc/letter-boxed/v1/{date}.json")))
+        return parse(LetterBoxedPuzzle, (yield Request(f"/svc/letter-boxed/v1/{date}.json")))
 
     # Spelling Bee
     def spelling_bee(self) -> SpellingBeeGameData:
@@ -415,7 +422,7 @@ class _Operations:
         game_data = get_game_data(page)
         if game_data is None:
             raise NYTGamesParseError("Spelling Bee game data not found in the page")
-        return SpellingBeeGameData(**game_data)
+        return parse(SpellingBeeGameData, game_data)
 
     def spelling_bee_puzzle(self, date: str) -> SpellingBeeGameDay:
         """Return the Spelling Bee puzzle for a date (YYYY-MM-DD).
@@ -427,7 +434,7 @@ class _Operations:
         NYTGamesNotFoundError.
         """
         response = (yield Request(f"/svc/spelling-bee/v1/{date}.json"))
-        return SpellingBeePuzzle(**response).to_game_day()
+        return parse(SpellingBeePuzzle, response).to_game_day()
 
     def spelling_bee_puzzles(self) -> dict[str, SpellingBeeGameDay]:
         """Return every Spelling Bee puzzle on the game page, keyed by print date.
@@ -451,12 +458,12 @@ class _Operations:
             "/svc/games/state/spelling_bee/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
         ))
-        return SpellingBeeLatest(**response)
+        return parse(SpellingBeeLatest, response)
 
     # Strands
     def strands(self, date: str) -> StrandsPuzzle:
         """Return the Strands puzzle for a date (YYYY-MM-DD)."""
-        return StrandsPuzzle(**(yield Request(f"/svc/strands/v2/{date}.json")))
+        return parse(StrandsPuzzle, (yield Request(f"/svc/strands/v2/{date}.json")))
 
     def strands_latest(self, puzzle_ids: PuzzleIds = None, bonus: bool = False) -> StrandsLatest:
         """Return the user's latest Strands game states.
@@ -470,7 +477,7 @@ class _Operations:
             f"/svc/games/state/{game}/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
         ))
-        return StrandsLatest(**response)
+        return parse(StrandsLatest, response)
 
     # Wordle
     def wordlebot(self) -> WordleBotAnalysis | None:
@@ -481,11 +488,13 @@ class _Operations:
         several (one each time you open WordleBot), the latest is returned.
         """
         entries = (yield Request(WORDLEBOT_URL))
+        if not isinstance(entries, list):
+            raise NYTGamesParseError(f"NYT's WordleBot response wasn't a JSON list (got {type(entries).__name__})")
         analyses = [
-            WordleBotAnalysis(**entry["content"], created_at=entry.get("created_at"),
-                              response_id=entry.get("response_id"))
+            parse(WordleBotAnalysis, entry["content"], created_at=entry.get("created_at"),
+                  response_id=entry.get("response_id"))
             for entry in entries
-            if isinstance(entry.get("content"), dict) and entry["content"].get("guesses")
+            if isinstance(entry, dict) and isinstance(entry.get("content"), dict) and entry["content"].get("guesses")
         ]
         return max(analyses, key=lambda a: a.created_at or "", default=None)
 
@@ -497,11 +506,11 @@ class _Operations:
         `solution` is given. Doesn't need cookies.
         """
         solution = solution or (yield from _Operations.wordle(self, date)).solution
-        return WordleBotSummary(**(yield Request(WORDLEBOT_SUMMARY_URL.format(solution=solution, date=date))))
+        return parse(WordleBotSummary, (yield Request(WORDLEBOT_SUMMARY_URL.format(solution=solution, date=date))))
 
     def wordle(self, date: str) -> WordlePuzzle:
         """Return the Wordle puzzle for a date (YYYY-MM-DD)."""
-        return WordlePuzzle(**(yield Request(f"/svc/wordle/v2/{date}.json")))
+        return parse(WordlePuzzle, (yield Request(f"/svc/wordle/v2/{date}.json")))
 
     def wordle_latest(self, puzzle_ids: PuzzleIds = None) -> WordlePuzzlesList:
         """Return the user's latest Wordle game states.
@@ -512,7 +521,7 @@ class _Operations:
             "/svc/games/state/wordleV2/latests",
             params={"puzzle_ids": join_puzzle_ids(puzzle_ids)},
         ))
-        return WordlePuzzlesList(**response)
+        return parse(WordlePuzzlesList, response)
 
 
 class NYTGamesClient(_Operations):

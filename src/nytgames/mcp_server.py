@@ -23,6 +23,7 @@ from nytgames import NYTGamesExportError
 from nytgames import NYTGamesHTTPError
 from nytgames import NYTGamesNoProfileError
 from nytgames import NYTGamesNotFoundError
+from nytgames import NYTGamesParseError
 from nytgames import NYTGamesRateLimitError
 from nytgames import __version__
 from nytgames import formats
@@ -105,6 +106,9 @@ def nyt_errors(fn):
             raise ToolError("NYT is rate limiting requests." + wait) from None
         except NYTGamesExportError as err:
             raise ToolError(f"This crossword can't be saved as {err.format}: " + "; ".join(err.reasons)) from None
+        except NYTGamesParseError as err:
+            # The message names fields, never the response's values.
+            raise ToolError(f"NYT's response wasn't in the expected format; NYT may have changed it. {err}") from None
         except NYTGamesHTTPError as err:
             status = err.response.status_code if err.response is not None else "unknown"
             raise ToolError(f"NYT returned an error (HTTP {status}).") from None
