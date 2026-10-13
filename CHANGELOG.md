@@ -21,6 +21,11 @@ versions may include breaking changes.
   that replaces the config only once complete, and the config stays 0600
   even if it had been made readable by others. `active_profile` is written
   atomically too. (#68)
+- Crossword exports with your saved progress skip saved entries that don't
+  name a square of the grid. A negative index used to fill a square from the
+  end (`-1` filled the last one), and a large negative or non-numeric one
+  raised `IndexError` or `ValueError`. Revealed and penciled squares are
+  checked the same way. (#67)
 
 ## 0.11.4 (2026-10-12)
 
